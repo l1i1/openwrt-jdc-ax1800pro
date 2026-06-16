@@ -1,0 +1,15 @@
+#!/bin/sh
+
+# nft flow offload can bypass sing-box TUN after the first packets of a UDP
+# flow. CS2 then sees the remote server through the physical WAN path instead
+# of the game-proxy selector, producing high ping and connection timeouts.
+
+uci -q set firewall.@defaults[0].flow_offloading='0'
+uci -q set firewall.@defaults[0].flow_offloading_hw='0'
+uci -q commit firewall
+
+if [ -x /etc/init.d/firewall ]; then
+  /etc/init.d/firewall restart >/dev/null 2>&1 || true
+fi
+
+exit 0

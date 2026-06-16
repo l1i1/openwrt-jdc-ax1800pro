@@ -86,6 +86,7 @@ repair_boot_critical_overlay_files() {
     "etc/init.d/rc-common-selfheal:0755" \
     "etc/init.d/mgrserver:0755" \
     "etc/uci-defaults/96-ath11k-mac80211-compat:0755" \
+    "etc/uci-defaults/98-disable-flow-offload-for-singbox:0755" \
     "etc/uci-defaults/98-home-partition:0755" \
     "etc/uci-defaults/99-mgrserver-ports:0755" \
     "etc/uci-defaults/99-restrict-admin-vpn:0755" \

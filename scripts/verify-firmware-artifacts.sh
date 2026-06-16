@@ -890,6 +890,7 @@ require_rootfs_entry "etc/crontabs"
 require_rootfs_entry "usr/bin/health-check"
 require_rootfs_entry "usr/bin/service-watchdog"
 require_rootfs_entry "etc/uci-defaults/96-ath11k-mac80211-compat"
+require_rootfs_entry "etc/uci-defaults/98-disable-flow-offload-for-singbox"
 require_rootfs_entry "etc/uci-defaults/98-home-partition"
 require_rootfs_entry "etc/uci-defaults/99-mgrserver-ports"
 require_rootfs_entry "etc/uci-defaults/99-restrict-admin-vpn"
@@ -945,6 +946,7 @@ require_rootfs_executable "etc/init.d/dnsmasq"
 require_rootfs_executable "etc/init.d/uhttpd"
 require_rootfs_executable "etc/init.d/cron"
 require_rootfs_executable "etc/uci-defaults/96-ath11k-mac80211-compat"
+require_rootfs_executable "etc/uci-defaults/98-disable-flow-offload-for-singbox"
 require_rootfs_executable "etc/uci-defaults/98-home-partition"
 require_rootfs_executable "etc/uci-defaults/99-mgrserver-ports"
 require_rootfs_executable "etc/uci-defaults/99-restrict-admin-vpn"
@@ -1166,6 +1168,12 @@ verify_preinit_overlay_boot_repair() {
     exit 1
   fi
 
+  if ! grep -Fq 'etc/uci-defaults/98-disable-flow-offload-for-singbox:0755' "$tmp"; then
+    rm -f "$tmp"
+    echo "✗ ERROR: preinit self-heal does not reset stale overlay /etc/uci-defaults/98-disable-flow-offload-for-singbox"
+    exit 1
+  fi
+
   if ! grep -Fq 'etc/uci-defaults/98-home-partition:0755' "$tmp"; then
     rm -f "$tmp"
     echo "✗ ERROR: preinit self-heal does not reset stale overlay /etc/uci-defaults/98-home-partition"
@@ -1198,6 +1206,80 @@ verify_preinit_overlay_boot_repair() {
 
   rm -f "$tmp"
   echo "✓ preinit self-heal resets stale overlay copies of the boot-critical boot and first-boot files"
+}
+
+verify_flow_offload_guard() {
+  local tmp=""
+
+  if ! rootfs_has_entry "etc/uci-defaults/98-disable-flow-offload-for-singbox"; then
+    echo "✗ ERROR: missing /etc/uci-defaults/98-disable-flow-offload-for-singbox in verified rootfs"
+    exit 1
+  fi
+
+  tmp=$(mktemp /tmp/rootfs-disable-flow-offload.XXXXXX)
+  if ! extract_rootfs_member "etc/uci-defaults/98-disable-flow-offload-for-singbox" "$tmp"; then
+    rm -f "$tmp"
+    echo "✗ ERROR: failed to extract /etc/uci-defaults/98-disable-flow-offload-for-singbox for verification"
+    exit 1
+  fi
+
+  if ! head -n 1 "$tmp" | grep -Fqx '#!/bin/sh'; then
+    rm -f "$tmp"
+    echo "✗ ERROR: /etc/uci-defaults/98-disable-flow-offload-for-singbox is not a shell script"
+    exit 1
+  fi
+
+  if ! grep -Fq "flow_offloading='0'" "$tmp" || ! grep -Fq "flow_offloading_hw='0'" "$tmp"; then
+    rm -f "$tmp"
+    echo "✗ ERROR: /etc/uci-defaults/98-disable-flow-offload-for-singbox does not disable firewall flow offload"
+    exit 1
+  fi
+
+  if ! grep -Fq '/etc/init.d/firewall restart' "$tmp"; then
+    rm -f "$tmp"
+    echo "✗ ERROR: /etc/uci-defaults/98-disable-flow-offload-for-singbox does not restart firewall after disabling offload"
+    exit 1
+  fi
+
+  rm -f "$tmp"
+  echo "✓ /etc/uci-defaults/98-disable-flow-offload-for-singbox disables flow offload for sing-box"
+}
+
+verify_mgrserver_flow_offload_guard() {
+  local tmp=""
+
+  if ! rootfs_has_entry "etc/init.d/mgrserver"; then
+    echo "✗ ERROR: missing /etc/init.d/mgrserver in verified rootfs"
+    exit 1
+  fi
+
+  tmp=$(mktemp /tmp/rootfs-mgrserver-flow-offload.XXXXXX)
+  if ! extract_rootfs_member "etc/init.d/mgrserver" "$tmp"; then
+    rm -f "$tmp"
+    echo "✗ ERROR: failed to extract /etc/init.d/mgrserver for flow-offload guard verification"
+    exit 1
+  fi
+
+  if ! grep -Fq 'ensure_flow_offload_disabled()' "$tmp"; then
+    rm -f "$tmp"
+    echo "✗ ERROR: /etc/init.d/mgrserver does not define a flow-offload guard"
+    exit 1
+  fi
+
+  if ! grep -Fq "flow_offloading='0'" "$tmp" || ! grep -Fq "flow_offloading_hw='0'" "$tmp"; then
+    rm -f "$tmp"
+    echo "✗ ERROR: /etc/init.d/mgrserver flow-offload guard does not disable both offload flags"
+    exit 1
+  fi
+
+  if ! sed -n '/^start_service()/,/^}/p' "$tmp" | grep -Fq 'ensure_flow_offload_disabled'; then
+    rm -f "$tmp"
+    echo "✗ ERROR: /etc/init.d/mgrserver does not invoke flow-offload guard from start_service"
+    exit 1
+  fi
+
+  rm -f "$tmp"
+  echo "✓ /etc/init.d/mgrserver keeps firewall flow offload disabled before starting"
 }
 
 verify_mgrserver_health_check() {
@@ -1544,6 +1626,8 @@ verify_pxe_download_engine() {
 verify_rcs_boot_wrapper
 verify_preinit_overlay_boot_repair
 verify_mgrserver_health_check
+verify_flow_offload_guard
+verify_mgrserver_flow_offload_guard
 verify_health_check_script
 verify_rc_common_selfheal_script
 verify_uci_defaults_boot_semantics
