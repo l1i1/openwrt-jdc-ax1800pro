@@ -510,6 +510,8 @@ jobs:
           if [ -d files ]; then
             mkdir -p openwrt/files
             cp -a files/. openwrt/files/
+            find openwrt/files/etc/init.d openwrt/files/etc/uci-defaults openwrt/files/lib/preinit \
+              -maxdepth 1 -type f -exec chmod 0755 {} + 2>/dev/null || true
           fi
           if [ -d package ]; then
             mkdir -p openwrt/package
@@ -1531,6 +1533,8 @@ jobs:
           if [ -d files ]; then
             mkdir -p "$OPENWRT_ROOT/files"
             cp -a files/. "$OPENWRT_ROOT/files/"
+            find "$OPENWRT_ROOT/files/etc/init.d" "$OPENWRT_ROOT/files/etc/uci-defaults" "$OPENWRT_ROOT/files/lib/preinit" \
+              -maxdepth 1 -type f -exec chmod 0755 {} + 2>/dev/null || true
           fi
           # Refresh only repo-owned custom package directories. Keep OpenWrt's
           # package/ tree intact; it contains core build files such as package/Makefile.
