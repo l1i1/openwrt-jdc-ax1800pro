@@ -1483,9 +1483,15 @@ verify_uci_defaults_boot_semantics() {
     exit 1
   fi
 
-  if ! grep -Fq 'ensure_mgrserver_started' "$tmp" || ! grep -Fq 'run_init_script mgrserver restart' "$tmp" || ! grep -Fq 'run_init_script mgrserver start' "$tmp"; then
+  if ! grep -Fq 'ensure_mgrserver_started' "$tmp" || ! grep -Fq 'run_init_script mgrserver start' "$tmp"; then
     rm -f "$tmp"
     echo "✗ ERROR: /etc/uci-defaults/99-mgrserver-ports does not start MgrServer during the first boot pass"
+    exit 1
+  fi
+
+  if grep -Fq 'run_init_script mgrserver restart' "$tmp" || grep -Fq 'run_init_script mgrserver health_check' "$tmp"; then
+    rm -f "$tmp"
+    echo "✗ ERROR: /etc/uci-defaults/99-mgrserver-ports blocks first boot on MgrServer restart/health_check"
     exit 1
   fi
 

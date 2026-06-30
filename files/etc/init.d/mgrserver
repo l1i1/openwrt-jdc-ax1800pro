@@ -279,14 +279,15 @@ service_started() {
   config_load mgrserver
   config_get port main port "80"
   
-  # Wait for service to be ready
-  sleep 2
-  
-  if do_health_check "$port"; then
-    log_msg "info" "MgrServer health check passed"
-  else
-    log_msg "warn" "MgrServer health check failed, service may not be ready"
-  fi
+  (
+    # Wait for service to be ready without blocking OpenWrt boot.
+    sleep 2
+    if do_health_check "$port"; then
+      log_msg "info" "MgrServer health check passed"
+    else
+      log_msg "warn" "MgrServer health check failed, service may not be ready"
+    fi
+  ) &
 }
 
 # Reload configuration
