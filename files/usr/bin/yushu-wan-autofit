@@ -1,0 +1,346 @@
+#!/bin/sh
+# Conservative WAN port auto-fit for devices whose physical WAN port links
+# up but cannot pass DHCP/ARP with the upstream AP.
+
+LOG_TAG="yushu-wan-autofit"
+LOCK_DIR="/tmp/yushu-wan-autofit.lock"
+
+PHYSICAL_WAN="${YUSHU_WAN_AUTOFIT_PHYSICAL_WAN:-wan}"
+LAN_PORTS="${YUSHU_WAN_AUTOFIT_LAN_PORTS:-lan1 lan2 lan3}"
+CANDIDATES="${YUSHU_WAN_AUTOFIT_CANDIDATES:-$PHYSICAL_WAN $LAN_PORTS}"
+CURRENT_WAIT_SECONDS="${YUSHU_WAN_AUTOFIT_CURRENT_WAIT_SECONDS:-24}"
+TRY_WAIT_SECONDS="${YUSHU_WAN_AUTOFIT_TRY_WAIT_SECONDS:-18}"
+BOOT_DELAY_SECONDS="${YUSHU_WAN_AUTOFIT_BOOT_DELAY_SECONDS:-35}"
+
+log_msg() {
+  logger -t "$LOG_TAG" "$1" 2>/dev/null || true
+}
+
+cleanup() {
+  rmdir "$LOCK_DIR" 2>/dev/null || true
+}
+
+take_lock() {
+  if ! mkdir "$LOCK_DIR" 2>/dev/null; then
+    log_msg "another auto-fit run is active; skipping"
+    exit 0
+  fi
+  trap cleanup EXIT INT TERM
+}
+
+dev_exists() {
+  [ -n "$1" ] && [ -d "/sys/class/net/$1" ]
+}
+
+link_is_up() {
+  local dev="$1"
+
+  dev_exists "$dev" || return 1
+  ip link set dev "$dev" up 2>/dev/null || true
+  [ "$(cat "/sys/class/net/$dev/carrier" 2>/dev/null || echo 0)" = "1" ]
+}
+
+is_lan_port() {
+  local dev="$1"
+  local port=""
+
+  for port in $LAN_PORTS; do
+    [ "$dev" = "$port" ] && return 0
+  done
+
+  return 1
+}
+
+current_wan_device() {
+  local dev=""
+
+  dev="$(uci -q get network.wan.device 2>/dev/null || true)"
+  [ -n "$dev" ] || dev="$(uci -q get network.wan.ifname 2>/dev/null || true)"
+  [ -n "$dev" ] || dev="$PHYSICAL_WAN"
+  printf '%s\n' "$dev"
+}
+
+find_br_lan_section() {
+  local section=""
+
+  for section in $(uci show network 2>/dev/null | awk -F'[.=]' '/=device$/ {print $2}'); do
+    [ "$(uci -q get network."$section".name 2>/dev/null || true)" = "br-lan" ] || continue
+    printf '%s\n' "$section"
+    return 0
+  done
+
+  return 1
+}
+
+br_lan_ports() {
+  local section="$1"
+
+  [ -n "$section" ] || return 0
+  uci -q get network."$section".ports 2>/dev/null || true
+}
+
+restore_br_lan_ports() {
+  local section="$1"
+  local ports="$2"
+  local port=""
+
+  [ -n "$section" ] || return 0
+  [ -n "$ports" ] || return 0
+
+  uci -q delete network."$section".ports 2>/dev/null || true
+  for port in $ports; do
+    dev_exists "$port" || continue
+    uci add_list network."$section".ports="$port"
+  done
+}
+
+set_br_lan_ports_for_candidate() {
+  local candidate="$1"
+  local section="$2"
+  local port=""
+
+  [ -n "$section" ] || return 0
+
+  uci -q delete network."$section".ports 2>/dev/null || true
+  for port in $LAN_PORTS; do
+    dev_exists "$port" || continue
+    [ "$port" = "$candidate" ] && continue
+    uci add_list network."$section".ports="$port"
+  done
+}
+
+br_lan_has_client() {
+  ip neigh show dev br-lan 2>/dev/null | grep -Eq 'lladdr .* (REACHABLE|STALE|DELAY|PROBE)$'
+}
+
+br_lan_has_alternate_path() {
+  local candidate="$1"
+  local brif=""
+  local dev=""
+
+  for brif in /sys/class/net/br-lan/brif/*; do
+    [ -e "$brif" ] || continue
+    dev="${brif##*/}"
+    [ "$dev" = "$candidate" ] && continue
+
+    case "$dev" in
+      phy*-ap*|wlan*|ra*)
+        ip link show dev "$dev" 2>/dev/null | grep -q "LOWER_UP" && return 0
+        ;;
+      lan*)
+        [ "$(cat "/sys/class/net/$dev/carrier" 2>/dev/null || echo 0)" = "1" ] && return 0
+        ;;
+    esac
+  done
+
+  return 1
+}
+
+candidate_is_safe() {
+  local candidate="$1"
+
+  is_lan_port "$candidate" || return 0
+  [ "${YUSHU_WAN_AUTOFIT_ALLOW_LAST_LAN:-0}" = "1" ] && return 0
+  br_lan_has_alternate_path "$candidate" && return 0
+  br_lan_has_client || return 0
+
+  log_msg "skip $candidate: no alternate br-lan management path"
+  return 1
+}
+
+wan_has_ipv4_and_default() {
+  local dev="$1"
+
+  ip -4 -o addr show dev "$dev" 2>/dev/null | awk 'NR == 1 {found = 1} END {exit found ? 0 : 1}' || return 1
+  ip -4 route show default 2>/dev/null | awk -v dev="$dev" '
+    $1 == "default" {
+      for (i = 1; i <= NF; i++) {
+        if ($i == "dev" && $(i + 1) == dev) {
+          ok = 1
+        }
+      }
+    }
+    END { exit ok ? 0 : 1 }
+  '
+}
+
+default_gateway_for_dev() {
+  local dev="$1"
+
+  ip -4 route show default 2>/dev/null | awk -v dev="$dev" '
+    /^default / {
+      for (i = 1; i <= NF; i++) {
+        if ($i == "dev" && $(i + 1) != dev) {
+          next
+        }
+      }
+      for (i = 1; i <= NF; i++) {
+        if ($i == "via") {
+          print $(i + 1)
+          exit
+        }
+      }
+    }
+  '
+}
+
+gateway_l2_ok() {
+  local dev="$1"
+  local gw="$2"
+
+  [ -n "$gw" ] || return 1
+  ping -I "$dev" -c 1 -W 1 "$gw" >/dev/null 2>&1 || true
+  ip neigh show dev "$dev" 2>/dev/null | awk -v gw="$gw" '
+    $1 == gw && $0 ~ /lladdr/ && $0 !~ /(FAILED|INCOMPLETE)/ { ok = 1 }
+    END { exit ok ? 0 : 1 }
+  '
+}
+
+internet_ping_ok() {
+  local dev="$1"
+
+  ping -I "$dev" -c 1 -W 2 223.5.5.5 >/dev/null 2>&1 && return 0
+  ping -I "$dev" -c 1 -W 2 1.1.1.1 >/dev/null 2>&1
+}
+
+wan_is_healthy() {
+  local dev="$1"
+  local gw=""
+
+  dev_exists "$dev" || return 1
+  wan_has_ipv4_and_default "$dev" || return 1
+
+  gw="$(default_gateway_for_dev "$dev")"
+  gateway_l2_ok "$dev" "$gw" && return 0
+  internet_ping_ok "$dev" && return 0
+
+  return 1
+}
+
+wait_wan_healthy() {
+  local dev="$1"
+  local max_seconds="$2"
+  local elapsed=0
+
+  while [ "$elapsed" -lt "$max_seconds" ]; do
+    wan_is_healthy "$dev" && return 0
+    sleep 2
+    elapsed=$((elapsed + 2))
+  done
+
+  wan_is_healthy "$dev"
+}
+
+apply_candidate_config() {
+  local candidate="$1"
+  local br_section="$2"
+
+  set_br_lan_ports_for_candidate "$candidate" "$br_section"
+  uci set network.wan.device="$candidate"
+  uci set network.wan.proto="dhcp"
+  if uci -q get network.wan6 >/dev/null 2>&1; then
+    uci set network.wan6.device="$candidate"
+  fi
+  uci commit network
+
+  ip link set dev "$candidate" up 2>/dev/null || true
+  ifdown wan >/dev/null 2>&1 || true
+  ifup lan >/dev/null 2>&1 || true
+  ifup wan >/dev/null 2>&1 || true
+}
+
+restore_original_config() {
+  local orig_wan="$1"
+  local orig_wan6="$2"
+  local br_section="$3"
+  local orig_ports="$4"
+
+  [ -n "$orig_wan" ] && uci set network.wan.device="$orig_wan"
+  uci set network.wan.proto="dhcp"
+  if [ -n "$orig_wan6" ] && uci -q get network.wan6 >/dev/null 2>&1; then
+    uci set network.wan6.device="$orig_wan6"
+  fi
+  restore_br_lan_ports "$br_section" "$orig_ports"
+  uci commit network
+  ifdown wan >/dev/null 2>&1 || true
+  ifup lan >/dev/null 2>&1 || true
+  ifup wan >/dev/null 2>&1 || true
+}
+
+try_candidate() {
+  local candidate="$1"
+  local br_section="$2"
+
+  dev_exists "$candidate" || {
+    log_msg "skip $candidate: device missing"
+    return 1
+  }
+
+  link_is_up "$candidate" || {
+    log_msg "skip $candidate: no carrier"
+    return 1
+  }
+
+  candidate_is_safe "$candidate" || return 1
+
+  log_msg "trying WAN candidate $candidate"
+  apply_candidate_config "$candidate" "$br_section"
+
+  if wait_wan_healthy "$candidate" "$TRY_WAIT_SECONDS"; then
+    log_msg "selected WAN candidate $candidate"
+    return 0
+  fi
+
+  log_msg "candidate $candidate failed DHCP/connectivity probe"
+  return 1
+}
+
+main() {
+  local mode="$1"
+  local current=""
+  local br_section=""
+  local orig_wan=""
+  local orig_wan6=""
+  local orig_ports=""
+  local candidate=""
+
+  [ "$mode" = "--boot" ] && sleep "$BOOT_DELAY_SECONDS"
+
+  take_lock
+
+  current="$(current_wan_device)"
+  if wait_wan_healthy "$current" 2; then
+    log_msg "current WAN $current is healthy"
+    exit 0
+  fi
+
+  if ifup wan >/dev/null 2>&1; then
+    wait_wan_healthy "$current" "$CURRENT_WAIT_SECONDS" && {
+      log_msg "current WAN $current is healthy"
+      exit 0
+    }
+  elif wait_wan_healthy "$current" 4; then
+    log_msg "current WAN $current is healthy"
+    exit 0
+  fi
+
+  br_section="$(find_br_lan_section || true)"
+  orig_wan="$current"
+  orig_wan6="$(uci -q get network.wan6.device 2>/dev/null || true)"
+  orig_ports="$(br_lan_ports "$br_section")"
+
+  log_msg "current WAN $current is unhealthy; scanning candidates"
+
+  for candidate in $CANDIDATES; do
+    [ "$candidate" = "$current" ] && continue
+    if try_candidate "$candidate" "$br_section"; then
+      exit 0
+    fi
+  done
+
+  log_msg "no WAN candidate passed; restoring $orig_wan"
+  restore_original_config "$orig_wan" "$orig_wan6" "$br_section" "$orig_ports"
+  exit 1
+}
+
+main "${1:---once}"

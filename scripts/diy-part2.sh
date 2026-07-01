@@ -10,6 +10,15 @@ echo "DIY Part 2: Custom settings"
 echo "Setting hostname to JDCloud..."
 sed -i 's/ImmortalWrt/JDCloud/g' package/base-files/files/bin/config_generate
 
+# Use the YuShu management subnet even when WAN is disconnected on first boot.
+echo "Setting default LAN IP to 10.10.10.1..."
+if grep -Fq "192.168.1.1" package/base-files/files/bin/config_generate; then
+    sed -i 's/192\.168\.1\.1/10.10.10.1/g' package/base-files/files/bin/config_generate
+    echo "  default LAN IP patched in config_generate"
+else
+    echo "  WARNING: default LAN IP pattern not found in config_generate"
+fi
+
 # Modify default timezone
 echo "Setting timezone to Asia/Shanghai..."
 sed -i "s|timezone='UTC'|timezone='CST-8'|g" package/base-files/files/bin/config_generate
@@ -64,6 +73,15 @@ if [ -d "$OVERLAY_DIR" ]; then
         if [ -f "$f" ]; then
             chmod 0755 "$f"
             echo "  chmod 0755 $(basename "$f")"
+        fi
+    done
+
+    # Ensure overlay helper scripts are executable even when staged from a
+    # Windows checkout where file mode bits are not reliable.
+    for f in "$OVERLAY_DIR/usr/bin/"*; do
+        if [ -f "$f" ]; then
+            chmod 0755 "$f"
+            echo "  chmod 0755 usr/bin/$(basename "$f")"
         fi
     done
 

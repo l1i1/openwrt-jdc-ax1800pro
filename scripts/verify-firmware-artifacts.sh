@@ -889,12 +889,15 @@ require_rootfs_entry "etc/init.d/cron"
 require_rootfs_entry "etc/crontabs"
 require_rootfs_entry "usr/bin/health-check"
 require_rootfs_entry "usr/bin/service-watchdog"
+require_rootfs_entry "usr/bin/yushu-wan-autofit"
+require_rootfs_entry "etc/uci-defaults/95-yushu-default-lan"
 require_rootfs_entry "etc/uci-defaults/96-ath11k-mac80211-compat"
 require_rootfs_entry "etc/uci-defaults/98-disable-flow-offload-for-singbox"
 require_rootfs_entry "etc/uci-defaults/98-home-partition"
 require_rootfs_entry "etc/uci-defaults/99-mgrserver-ports"
 require_rootfs_entry "etc/uci-defaults/99-restrict-admin-vpn"
 require_rootfs_entry "etc/uci-defaults/99-service-watchdog-cron"
+require_rootfs_entry "etc/uci-defaults/99-yushu-wan-autofit"
 require_rootfs_entry "lib/preinit/81_rc_common_selfheal"
 require_rootfs_entry "usr/bin/sing-box"
 require_rootfs_entry "etc/init.d/sing-box"
@@ -945,12 +948,15 @@ require_rootfs_executable "etc/init.d/firewall"
 require_rootfs_executable "etc/init.d/dnsmasq"
 require_rootfs_executable "etc/init.d/uhttpd"
 require_rootfs_executable "etc/init.d/cron"
+require_rootfs_executable "etc/uci-defaults/95-yushu-default-lan"
 require_rootfs_executable "etc/uci-defaults/96-ath11k-mac80211-compat"
 require_rootfs_executable "etc/uci-defaults/98-disable-flow-offload-for-singbox"
 require_rootfs_executable "etc/uci-defaults/98-home-partition"
 require_rootfs_executable "etc/uci-defaults/99-mgrserver-ports"
 require_rootfs_executable "etc/uci-defaults/99-restrict-admin-vpn"
 require_rootfs_executable "etc/uci-defaults/99-service-watchdog-cron"
+require_rootfs_executable "etc/uci-defaults/99-yushu-wan-autofit"
+require_rootfs_executable "usr/bin/yushu-wan-autofit"
 require_rootfs_executable "usr/share/mgrserver-defaults/res/pxe/set_pxe.sh"
 require_rootfs_executable "usr/share/mgrserver-defaults/res/pxe/up_pxe_res.sh"
 
@@ -1162,6 +1168,12 @@ verify_preinit_overlay_boot_repair() {
     exit 1
   fi
 
+  if ! grep -Fq 'etc/uci-defaults/95-yushu-default-lan:0755' "$tmp"; then
+    rm -f "$tmp"
+    echo "✗ ERROR: preinit self-heal does not reset stale overlay /etc/uci-defaults/95-yushu-default-lan"
+    exit 1
+  fi
+
   if ! grep -Fq 'etc/uci-defaults/96-ath11k-mac80211-compat:0755' "$tmp"; then
     rm -f "$tmp"
     echo "✗ ERROR: preinit self-heal does not reset stale overlay /etc/uci-defaults/96-ath11k-mac80211-compat"
@@ -1195,6 +1207,12 @@ verify_preinit_overlay_boot_repair() {
   if ! grep -Fq 'etc/uci-defaults/99-service-watchdog-cron:0755' "$tmp"; then
     rm -f "$tmp"
     echo "✗ ERROR: preinit self-heal does not reset stale overlay /etc/uci-defaults/99-service-watchdog-cron"
+    exit 1
+  fi
+
+  if ! grep -Fq 'etc/uci-defaults/99-yushu-wan-autofit:0755' "$tmp"; then
+    rm -f "$tmp"
+    echo "✗ ERROR: preinit self-heal does not reset stale overlay /etc/uci-defaults/99-yushu-wan-autofit"
     exit 1
   fi
 
@@ -1390,6 +1408,30 @@ verify_rc_common_selfheal_script() {
 verify_uci_defaults_boot_semantics() {
   local tmp=""
 
+  tmp=$(mktemp /tmp/rootfs-yushu-default-lan.XXXXXX)
+  if ! extract_rootfs_member "etc/uci-defaults/95-yushu-default-lan" "$tmp"; then
+    rm -f "$tmp"
+    echo "✗ ERROR: failed to extract /etc/uci-defaults/95-yushu-default-lan for boot-semantics verification"
+    exit 1
+  fi
+
+  if grep -Fq 'rm -f "$0"' "$tmp"; then
+    rm -f "$tmp"
+    echo "✗ ERROR: /etc/uci-defaults/95-yushu-default-lan still tries to self-delete via \$0"
+    exit 1
+  fi
+
+  if ! grep -Fq 'DEFAULT_LAN_IP="10.10.10.1"' "$tmp" || \
+     ! grep -Fq '192.168.1.1' "$tmp" || \
+     ! grep -Fq 'network.lan.ipaddr="$DEFAULT_LAN_IP"' "$tmp" || \
+     ! grep -Fq 'address=/yushu-router/${lan_ip}' "$tmp"; then
+    rm -f "$tmp"
+    echo "✗ ERROR: /etc/uci-defaults/95-yushu-default-lan does not pin LAN and router DNS defaults"
+    exit 1
+  fi
+
+  rm -f "$tmp"
+
   tmp=$(mktemp /tmp/rootfs-ath11k-defaults.XXXXXX)
   if ! extract_rootfs_member "etc/uci-defaults/96-ath11k-mac80211-compat" "$tmp"; then
     rm -f "$tmp"
@@ -1496,6 +1538,48 @@ verify_uci_defaults_boot_semantics() {
   fi
 
   rm -f "$tmp"
+
+  tmp=$(mktemp /tmp/rootfs-wan-autofit-defaults.XXXXXX)
+  if ! extract_rootfs_member "etc/uci-defaults/99-yushu-wan-autofit" "$tmp"; then
+    rm -f "$tmp"
+    echo "✗ ERROR: failed to extract /etc/uci-defaults/99-yushu-wan-autofit for boot-semantics verification"
+    exit 1
+  fi
+
+  if grep -Fq 'rm -f "$0"' "$tmp"; then
+    rm -f "$tmp"
+    echo "✗ ERROR: /etc/uci-defaults/99-yushu-wan-autofit still tries to self-delete via \$0"
+    exit 1
+  fi
+
+  if ! grep -Fq 'CRON_LINE="*/5 * * * * /usr/bin/yushu-wan-autofit --once"' "$tmp" || \
+     ! grep -Fq '/usr/bin/yushu-wan-autofit --boot' "$tmp" || \
+     ! grep -Fq ') >/dev/null 2>&1 &' "$tmp"; then
+    rm -f "$tmp"
+    echo "✗ ERROR: /etc/uci-defaults/99-yushu-wan-autofit does not install non-blocking boot/cron probes"
+    exit 1
+  fi
+
+  rm -f "$tmp"
+
+  tmp=$(mktemp /tmp/rootfs-wan-autofit.XXXXXX)
+  if ! extract_rootfs_member "usr/bin/yushu-wan-autofit" "$tmp"; then
+    rm -f "$tmp"
+    echo "✗ ERROR: failed to extract /usr/bin/yushu-wan-autofit for boot-semantics verification"
+    exit 1
+  fi
+
+  if ! grep -Fq 'wan_is_healthy()' "$tmp" || \
+     ! grep -Fq 'gateway_l2_ok()' "$tmp" || \
+     ! grep -Fq 'candidate_is_safe()' "$tmp" || \
+     ! grep -Fq 'set_br_lan_ports_for_candidate()' "$tmp" || \
+     ! grep -Fq 'PHYSICAL_WAN="${YUSHU_WAN_AUTOFIT_PHYSICAL_WAN:-wan}"' "$tmp"; then
+    rm -f "$tmp"
+    echo "✗ ERROR: /usr/bin/yushu-wan-autofit does not contain conservative WAN candidate probing"
+    exit 1
+  fi
+
+  rm -f "$tmp"
   echo "✓ uci-defaults rely on boot-managed cleanup and avoid mountpoint(1) dependencies"
 }
 
@@ -1575,6 +1659,21 @@ verify_rom_rc_common_runtime_calls() {
   if ! grep -Fq 'RC_COMMON="/rom/etc/rc.common"' "$tmp"; then
     rm -f "$tmp"
     echo "✗ ERROR: /etc/uci-defaults/99-service-watchdog-cron does not pin cron init-script calls to /rom/etc/rc.common"
+    exit 1
+  fi
+
+  rm -f "$tmp"
+
+  tmp=$(mktemp /tmp/rootfs-wan-autofit-cron.XXXXXX)
+  if ! extract_rootfs_member "etc/uci-defaults/99-yushu-wan-autofit" "$tmp"; then
+    rm -f "$tmp"
+    echo "✗ ERROR: failed to extract /etc/uci-defaults/99-yushu-wan-autofit for runtime-call verification"
+    exit 1
+  fi
+
+  if ! grep -Fq 'RC_COMMON="/rom/etc/rc.common"' "$tmp"; then
+    rm -f "$tmp"
+    echo "✗ ERROR: /etc/uci-defaults/99-yushu-wan-autofit does not pin cron init-script calls to /rom/etc/rc.common"
     exit 1
   fi
 

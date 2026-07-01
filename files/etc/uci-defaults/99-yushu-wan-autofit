@@ -1,0 +1,57 @@
+#!/bin/sh
+
+LOG_TAG="yushu-wan-autofit-boot"
+CRON_LINE="*/5 * * * * /usr/bin/yushu-wan-autofit --once"
+RC_COMMON="/rom/etc/rc.common"
+
+log_msg() {
+  logger -t "$LOG_TAG" "$1" 2>/dev/null || true
+}
+
+run_init_script() {
+  local name="$1"
+  shift
+  local script="/etc/init.d/$name"
+
+  [ -f "$script" ] || return 127
+
+  if [ -f "$RC_COMMON" ]; then
+    /bin/sh "$RC_COMMON" "$script" "$@"
+    return $?
+  fi
+
+  "$script" "$@"
+}
+
+install_cron() {
+  if command -v crontab >/dev/null 2>&1; then
+    (crontab -l 2>/dev/null | grep -v "yushu-wan-autofit"; echo "$CRON_LINE") | crontab -
+    return 0
+  fi
+
+  mkdir -p /etc/crontabs
+  touch /etc/crontabs/root
+  grep -v "yushu-wan-autofit" /etc/crontabs/root > /tmp/yushu-wan-autofit-cron.$$ 2>/dev/null || true
+  echo "$CRON_LINE" >> /tmp/yushu-wan-autofit-cron.$$
+  mv /tmp/yushu-wan-autofit-cron.$$ /etc/crontabs/root
+}
+
+[ -x /usr/bin/yushu-wan-autofit ] || {
+  log_msg "missing /usr/bin/yushu-wan-autofit; skip setup"
+  exit 0
+}
+
+install_cron
+
+if [ -x /etc/init.d/cron ]; then
+  run_init_script cron restart >/dev/null 2>&1 || run_init_script cron reload >/dev/null 2>&1 || true
+elif command -v crond >/dev/null 2>&1; then
+  killall -HUP crond >/dev/null 2>&1 || crond -c /etc/crontabs >/dev/null 2>&1 || true
+fi
+
+(
+  /usr/bin/yushu-wan-autofit --boot
+) >/dev/null 2>&1 &
+
+log_msg "installed cron and started background boot probe"
+exit 0
