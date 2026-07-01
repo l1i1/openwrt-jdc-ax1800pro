@@ -207,6 +207,8 @@ jobs:
     timeout-minutes: 30
     outputs:
       mgrserver_commit: ${{ steps.mgrserver_ref.outputs.commit }}
+      release_tag: ${{ steps.firmware_release.outputs.release_tag }}
+      firmware_version_code: ${{ steps.firmware_release.outputs.firmware_version_code }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -244,8 +246,20 @@ jobs:
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "MgrServer version: $version"
 
+      - name: Generate firmware release version
+        id: firmware_release
+        run: |
+          release_tag="$(date +"%Y.%m.%d-%H%M")"
+          firmware_version_code="$(printf '%s' "$release_tag" | tr -cd '0-9')"
+          echo "release_tag=$release_tag" >> "$GITHUB_OUTPUT"
+          echo "firmware_version_code=$firmware_version_code" >> "$GITHUB_OUTPUT"
+          echo "Firmware release tag: $release_tag"
+          echo "Firmware version code: $firmware_version_code"
+
       - name: Build and stage MgrServer overlay
         env:
+          FIRMWARE_RELEASE_TAG: "${{ steps.firmware_release.outputs.release_tag }}"
+          FIRMWARE_VERSION_CODE: "${{ steps.firmware_release.outputs.firmware_version_code }}"
           MGRSERVER_BUILD_ID: "${{ steps.mgrserver_ref.outputs.commit }}-${{ github.run_number }}"
           MGRSERVER_VERSION: "${{ steps.mgrserver_version.outputs.version }}"
         run: bash "$GITHUB_WORKSPACE/scripts/stage-mgrserver-overlay.sh"
@@ -1877,14 +1891,15 @@ jobs:
         run: |
           MGRSERVER_COMMIT_SHORT="$(printf '%s' "${{ needs.build_mgrserver.outputs.mgrserver_commit || 'unknown' }}" | cut -c1-12)"
           OPENWRT_COMMIT_SHORT="$(printf '%s' "${{ needs.resolve_base_build.outputs.openwrt_commit || needs.build_base.outputs.openwrt_commit }}" | cut -c1-12)"
-          echo "release_tag=$(date +"%Y.%m.%d-%H%M")" >> $GITHUB_OUTPUT
+          echo "release_tag=${{ needs.build_mgrserver.outputs.release_tag }}" >> $GITHUB_OUTPUT
           touch release.txt
           echo "## OWFW AX1.8K Pro" >> release.txt
           echo "" >> release.txt
           echo "### 固件信息" >> release.txt
           echo "- 源码: ${REPO_DISPLAY_NAME} (${REPO_BRANCH})" >> release.txt
           echo "- OpenWrt Commit: ${OPENWRT_COMMIT_SHORT}" >> release.txt
-          echo "- 编译时间: $(date +"%Y-%m-%d %H:%M")" >> release.txt
+          echo "- 编译时间: ${{ needs.build_mgrserver.outputs.release_tag }}" >> release.txt
+          echo "- 固件版本: ${{ needs.build_mgrserver.outputs.firmware_version_code }}" >> release.txt
           echo "" >> release.txt
           echo "### MgrServer 叠加层" >> release.txt
           echo "- Commit: ${MGRSERVER_COMMIT_SHORT}" >> release.txt

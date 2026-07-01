@@ -8,6 +8,7 @@ CLEAR_SCRIPT="$WORKSPACE_ROOT/scripts/clear-mgrserver-runtime-overlay.sh"
 MGR_DEST="$FILES_ROOT/root/mgrserver"
 PXE_DEST="$FILES_ROOT/usr/share/mgrserver-defaults/res/pxe"
 PXE_SRC="$MGRSERVER_SRC/pxe-server"
+FIRMWARE_VERSION_DEST="$FILES_ROOT/etc/mgrserver/firmware_version"
 
 if [ ! -d "$MGRSERVER_SRC" ]; then
   echo "ERROR: MgrServer source directory not found: $MGRSERVER_SRC" >&2
@@ -42,6 +43,18 @@ if [ -d packages/web/dist ]; then
 else
   echo "ERROR: packages/web/dist not found after build" >&2
   exit 1
+fi
+
+if [ -n "${FIRMWARE_VERSION_CODE:-}" ]; then
+  if ! printf '%s' "$FIRMWARE_VERSION_CODE" | grep -Eq '^[0-9]+$'; then
+    echo "ERROR: FIRMWARE_VERSION_CODE must be numeric: $FIRMWARE_VERSION_CODE" >&2
+    exit 1
+  fi
+  mkdir -p "$(dirname "$FIRMWARE_VERSION_DEST")"
+  printf '%s\n' "$FIRMWARE_VERSION_CODE" > "$FIRMWARE_VERSION_DEST"
+  echo "Firmware version staged: $FIRMWARE_VERSION_CODE"
+else
+  echo "FIRMWARE_VERSION_CODE not set; keeping existing firmware_version overlay"
 fi
 
 cd "$MGR_DEST"
