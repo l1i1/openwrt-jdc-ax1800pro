@@ -886,10 +886,13 @@ require_rootfs_entry "etc/init.d/firewall"
 require_rootfs_entry "etc/init.d/dnsmasq"
 require_rootfs_entry "etc/init.d/uhttpd"
 require_rootfs_entry "etc/init.d/cron"
+require_rootfs_entry "etc/hotplug.d/iface/35-yushu-wan-autofit"
+require_rootfs_entry "etc/hotplug.d/net/35-yushu-wan-autofit"
 require_rootfs_entry "etc/crontabs"
 require_rootfs_entry "usr/bin/health-check"
 require_rootfs_entry "usr/bin/service-watchdog"
 require_rootfs_entry "usr/bin/yushu-wan-autofit"
+require_rootfs_entry "usr/bin/yushu-wan-autofit-hotplug"
 require_rootfs_entry "etc/uci-defaults/95-yushu-default-lan"
 require_rootfs_entry "etc/uci-defaults/96-ath11k-mac80211-compat"
 require_rootfs_entry "etc/uci-defaults/98-disable-flow-offload-for-singbox"
@@ -957,6 +960,7 @@ require_rootfs_executable "etc/uci-defaults/99-restrict-admin-vpn"
 require_rootfs_executable "etc/uci-defaults/99-service-watchdog-cron"
 require_rootfs_executable "etc/uci-defaults/99-yushu-wan-autofit"
 require_rootfs_executable "usr/bin/yushu-wan-autofit"
+require_rootfs_executable "usr/bin/yushu-wan-autofit-hotplug"
 require_rootfs_executable "usr/share/mgrserver-defaults/res/pxe/set_pxe.sh"
 require_rootfs_executable "usr/share/mgrserver-defaults/res/pxe/up_pxe_res.sh"
 
@@ -1165,6 +1169,18 @@ verify_preinit_overlay_boot_repair() {
   if ! grep -Fq 'etc/init.d/mgrserver:0755' "$tmp"; then
     rm -f "$tmp"
     echo "✗ ERROR: preinit self-heal does not reset stale overlay /etc/init.d/mgrserver"
+    exit 1
+  fi
+
+  if ! grep -Fq 'etc/hotplug.d/iface/35-yushu-wan-autofit:0644' "$tmp"; then
+    rm -f "$tmp"
+    echo "✗ ERROR: preinit self-heal does not reset stale overlay /etc/hotplug.d/iface/35-yushu-wan-autofit"
+    exit 1
+  fi
+
+  if ! grep -Fq 'etc/hotplug.d/net/35-yushu-wan-autofit:0644' "$tmp"; then
+    rm -f "$tmp"
+    echo "✗ ERROR: preinit self-heal does not reset stale overlay /etc/hotplug.d/net/35-yushu-wan-autofit"
     exit 1
   fi
 
@@ -1554,7 +1570,7 @@ verify_uci_defaults_boot_semantics() {
     exit 1
   fi
 
-  if ! grep -Fq 'CRON_LINE="*/5 * * * * /usr/bin/yushu-wan-autofit --once"' "$tmp" || \
+  if ! grep -Fq 'CRON_LINE="* * * * * /usr/bin/yushu-wan-autofit --once"' "$tmp" || \
      ! grep -Fq '/usr/bin/yushu-wan-autofit --boot' "$tmp" || \
      ! grep -Fq ') >/dev/null 2>&1 &' "$tmp"; then
     rm -f "$tmp"
@@ -1563,6 +1579,41 @@ verify_uci_defaults_boot_semantics() {
   fi
 
   rm -f "$tmp"
+
+  tmp=$(mktemp /tmp/rootfs-wan-autofit-hotplug.XXXXXX)
+  if ! extract_rootfs_member "usr/bin/yushu-wan-autofit-hotplug" "$tmp"; then
+    rm -f "$tmp"
+    echo "✗ ERROR: failed to extract /usr/bin/yushu-wan-autofit-hotplug for boot-semantics verification"
+    exit 1
+  fi
+
+  if ! grep -Fq 'AUTOFIT="/usr/bin/yushu-wan-autofit"' "$tmp" || \
+     ! grep -Fq 'PENDING_DIR="/tmp/yushu-wan-autofit.hotplug.pending"' "$tmp" || \
+     ! grep -Fq 'YUSHU_WAN_AUTOFIT_HOTPLUG_DELAY_SECONDS' "$tmp" || \
+     ! grep -Fq '"$AUTOFIT" --force' "$tmp"; then
+    rm -f "$tmp"
+    echo "✗ ERROR: /usr/bin/yushu-wan-autofit-hotplug does not schedule coalesced forced WAN probes"
+    exit 1
+  fi
+
+  rm -f "$tmp"
+
+  for rel in "etc/hotplug.d/iface/35-yushu-wan-autofit" "etc/hotplug.d/net/35-yushu-wan-autofit"; do
+    tmp=$(mktemp /tmp/rootfs-wan-autofit-hotplug-wrapper.XXXXXX)
+    if ! extract_rootfs_member "$rel" "$tmp"; then
+      rm -f "$tmp"
+      echo "✗ ERROR: failed to extract /$rel for boot-semantics verification"
+      exit 1
+    fi
+
+    if ! grep -Fq '/usr/bin/yushu-wan-autofit-hotplug' "$tmp"; then
+      rm -f "$tmp"
+      echo "✗ ERROR: /$rel does not invoke yushu-wan-autofit-hotplug"
+      exit 1
+    fi
+
+    rm -f "$tmp"
+  done
 
   tmp=$(mktemp /tmp/rootfs-wan-autofit.XXXXXX)
   if ! extract_rootfs_member "usr/bin/yushu-wan-autofit" "$tmp"; then
@@ -1575,6 +1626,8 @@ verify_uci_defaults_boot_semantics() {
      ! grep -Fq 'gateway_l2_ok()' "$tmp" || \
      ! grep -Fq 'candidate_is_safe()' "$tmp" || \
      ! grep -Fq 'reload_network_config()' "$tmp" || \
+     ! grep -Fq 'recent_failed_scan_matches()' "$tmp" || \
+     ! grep -Fq 'YUSHU_WAN_AUTOFIT_SCAN_COOLDOWN_SECONDS' "$tmp" || \
      ! grep -Fq 'set_br_lan_ports_for_candidate()' "$tmp" || \
      ! grep -Fq 'PHYSICAL_WAN="${YUSHU_WAN_AUTOFIT_PHYSICAL_WAN:-wan}"' "$tmp"; then
     rm -f "$tmp"

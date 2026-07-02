@@ -1,0 +1,53 @@
+#!/bin/sh
+
+LOG_TAG="yushu-wan-autofit-hotplug"
+AUTOFIT="/usr/bin/yushu-wan-autofit"
+PENDING_DIR="/tmp/yushu-wan-autofit.hotplug.pending"
+DEFAULT_CANDIDATES="wan lan1 lan2 lan3"
+
+log_msg() {
+  logger -t "$LOG_TAG" "$1" 2>/dev/null || true
+}
+
+[ -x "$AUTOFIT" ] || exit 0
+
+action="${1:-${ACTION:-}}"
+event_name="${2:-${INTERFACE:-}}"
+event_dev="${3:-${DEVICE:-${DEVICENAME:-}}}"
+
+case "$action" in
+  ifup|ifdown|ifupdate|add|remove|change|bind|unbind|online|offline)
+    ;;
+  *)
+    exit 0
+    ;;
+esac
+
+candidates="${YUSHU_WAN_AUTOFIT_CANDIDATES:-$DEFAULT_CANDIDATES}"
+should_probe=0
+
+[ "$event_name" = "wan" ] && should_probe=1
+
+for candidate in $candidates; do
+  [ "$event_dev" = "$candidate" ] && should_probe=1
+done
+
+[ "$should_probe" = "1" ] || exit 0
+
+delay="${YUSHU_WAN_AUTOFIT_HOTPLUG_DELAY_SECONDS:-8}"
+case "$delay" in
+  ""|*[!0-9]*) delay=8 ;;
+esac
+
+if ! mkdir "$PENDING_DIR" 2>/dev/null; then
+  exit 0
+fi
+
+(
+  sleep "$delay"
+  rmdir "$PENDING_DIR" 2>/dev/null || true
+  "$AUTOFIT" --force
+) >/dev/null 2>&1 &
+
+log_msg "scheduled WAN auto-fit after ${action:-unknown} event interface=${event_name:-unknown} device=${event_dev:-unknown}"
+exit 0

@@ -4,6 +4,7 @@
 
 LOG_TAG="yushu-wan-autofit"
 LOCK_DIR="/tmp/yushu-wan-autofit.lock"
+STATE_DIR="/tmp/yushu-wan-autofit"
 
 PHYSICAL_WAN="${YUSHU_WAN_AUTOFIT_PHYSICAL_WAN:-wan}"
 LAN_PORTS="${YUSHU_WAN_AUTOFIT_LAN_PORTS:-lan1 lan2 lan3}"
@@ -11,6 +12,7 @@ CANDIDATES="${YUSHU_WAN_AUTOFIT_CANDIDATES:-$PHYSICAL_WAN $LAN_PORTS}"
 CURRENT_WAIT_SECONDS="${YUSHU_WAN_AUTOFIT_CURRENT_WAIT_SECONDS:-24}"
 TRY_WAIT_SECONDS="${YUSHU_WAN_AUTOFIT_TRY_WAIT_SECONDS:-18}"
 BOOT_DELAY_SECONDS="${YUSHU_WAN_AUTOFIT_BOOT_DELAY_SECONDS:-35}"
+SCAN_COOLDOWN_SECONDS="${YUSHU_WAN_AUTOFIT_SCAN_COOLDOWN_SECONDS:-300}"
 
 log_msg() {
   logger -t "$LOG_TAG" "$1" 2>/dev/null || true
@@ -38,6 +40,64 @@ link_is_up() {
   dev_exists "$dev" || return 1
   ip link set dev "$dev" up 2>/dev/null || true
   [ "$(cat "/sys/class/net/$dev/carrier" 2>/dev/null || echo 0)" = "1" ]
+}
+
+now_seconds() {
+  date +%s 2>/dev/null || echo 0
+}
+
+candidate_carrier_signature() {
+  local candidate=""
+  local carrier=""
+
+  for candidate in $CANDIDATES; do
+    if dev_exists "$candidate"; then
+      ip link set dev "$candidate" up 2>/dev/null || true
+      carrier="$(cat "/sys/class/net/$candidate/carrier" 2>/dev/null || echo 0)"
+      printf '%s=%s;' "$candidate" "$carrier"
+    else
+      printf '%s=missing;' "$candidate"
+    fi
+  done
+  printf '\n'
+}
+
+recent_failed_scan_matches() {
+  local signature="$1"
+  local last_signature=""
+  local last_at=""
+  local now=""
+  local age=""
+
+  [ "${YUSHU_WAN_AUTOFIT_DISABLE_COOLDOWN:-0}" = "1" ] && return 1
+  [ "$SCAN_COOLDOWN_SECONDS" -gt 0 ] 2>/dev/null || return 1
+
+  [ -f "$STATE_DIR/last_failed_signature" ] || return 1
+  [ -f "$STATE_DIR/last_failed_at" ] || return 1
+
+  last_signature="$(cat "$STATE_DIR/last_failed_signature" 2>/dev/null || true)"
+  [ "$last_signature" = "$signature" ] || return 1
+
+  last_at="$(cat "$STATE_DIR/last_failed_at" 2>/dev/null || echo 0)"
+  now="$(now_seconds)"
+  case "$last_at:$now" in
+    *[!0-9:]*|:*|*:) return 1 ;;
+  esac
+  age=$((now - last_at))
+  [ "$age" -ge 0 ] 2>/dev/null || return 1
+  [ "$age" -lt "$SCAN_COOLDOWN_SECONDS" ]
+}
+
+record_failed_scan() {
+  local signature="$1"
+
+  mkdir -p "$STATE_DIR" 2>/dev/null || return 0
+  printf '%s\n' "$signature" > "$STATE_DIR/last_failed_signature" 2>/dev/null || true
+  now_seconds > "$STATE_DIR/last_failed_at" 2>/dev/null || true
+}
+
+clear_failed_scan_state() {
+  rm -f "$STATE_DIR/last_failed_signature" "$STATE_DIR/last_failed_at" 2>/dev/null || true
 }
 
 is_lan_port() {
@@ -311,24 +371,47 @@ main() {
   local orig_wan6=""
   local orig_ports=""
   local candidate=""
+  local force_scan=0
+  local signature=""
 
-  [ "$mode" = "--boot" ] && sleep "$BOOT_DELAY_SECONDS"
+  case "$mode" in
+    --boot)
+      sleep "$BOOT_DELAY_SECONDS"
+      ;;
+    --force)
+      force_scan=1
+      ;;
+    --once|"")
+      ;;
+    *)
+      log_msg "unknown mode $mode; treating as --once"
+      ;;
+  esac
 
   take_lock
 
   current="$(current_wan_device)"
   if wait_wan_healthy "$current" 2; then
+    clear_failed_scan_state
     log_msg "current WAN $current is healthy"
     exit 0
   fi
 
   if ifup wan >/dev/null 2>&1; then
     wait_wan_healthy "$current" "$CURRENT_WAIT_SECONDS" && {
+      clear_failed_scan_state
       log_msg "current WAN $current is healthy"
       exit 0
     }
   elif wait_wan_healthy "$current" 4; then
+    clear_failed_scan_state
     log_msg "current WAN $current is healthy"
+    exit 0
+  fi
+
+  signature="$(candidate_carrier_signature)"
+  if [ "$force_scan" -ne 1 ] && recent_failed_scan_matches "$signature"; then
+    log_msg "skip scan: carrier signature unchanged within ${SCAN_COOLDOWN_SECONDS}s cooldown ($signature)"
     exit 0
   fi
 
@@ -342,12 +425,14 @@ main() {
   for candidate in $CANDIDATES; do
     [ "$candidate" = "$current" ] && continue
     if try_candidate "$candidate" "$br_section"; then
+      clear_failed_scan_state
       exit 0
     fi
   done
 
   log_msg "no WAN candidate passed; restoring $orig_wan"
   restore_original_config "$orig_wan" "$orig_wan6" "$br_section" "$orig_ports"
+  record_failed_scan "$signature"
   exit 1
 }
 

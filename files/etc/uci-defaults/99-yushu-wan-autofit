@@ -1,7 +1,7 @@
 #!/bin/sh
 
 LOG_TAG="yushu-wan-autofit-boot"
-CRON_LINE="*/5 * * * * /usr/bin/yushu-wan-autofit --once"
+CRON_LINE="* * * * * /usr/bin/yushu-wan-autofit --once"
 RC_COMMON="/rom/etc/rc.common"
 
 log_msg() {

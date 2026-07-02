@@ -1,0 +1,5 @@
+#!/bin/sh
+
+[ -x /usr/bin/yushu-wan-autofit-hotplug ] || exit 0
+/usr/bin/yushu-wan-autofit-hotplug "$ACTION" "${INTERFACE:-}" "${DEVICENAME:-${DEVICE:-}}"
+exit 0
