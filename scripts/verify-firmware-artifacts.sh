@@ -1425,6 +1425,7 @@ verify_uci_defaults_boot_semantics() {
      ! grep -Fq '192.168.1.1' "$tmp" || \
      ! grep -Fq 'network.lan.ipaddr="$DEFAULT_LAN_IP"' "$tmp" || \
      ! grep -Fq 'address=/yushu-router/${lan_ip}' "$tmp" || \
+     ! grep -Fq 'lan_ip="${raw_lan_ip%%/*}"' "$tmp" || \
      ! grep -Fq 'RC_COMMON="/rom/etc/rc.common"' "$tmp"; then
     rm -f "$tmp"
     echo "✗ ERROR: /etc/uci-defaults/95-yushu-default-lan does not pin LAN and router DNS defaults"

@@ -26,30 +26,36 @@ run_init_script() {
 
 is_legacy_default_lan_ip() {
   local ip="$1"
+  local normalized_ip=""
   local legacy=""
 
-  [ -n "$ip" ] || return 0
-  [ "$ip" = "$DEFAULT_LAN_IP" ] && return 1
+  normalized_ip="${ip%%/*}"
+  [ -n "$normalized_ip" ] || return 0
+  [ "$normalized_ip" = "$DEFAULT_LAN_IP" ] && return 1
 
   for legacy in $LEGACY_DEFAULT_LAN_IPS; do
-    [ "$ip" = "$legacy" ] && return 0
+    [ "$normalized_ip" = "$legacy" ] && return 0
   done
 
   return 1
 }
 
 sync_router_dns_records() {
-  local lan_ip="$1"
+  local raw_lan_ip="$1"
+  local lan_ip=""
   local dnsmasq_section=""
   local host=""
   local stale_ip=""
+
+  lan_ip="${raw_lan_ip%%/*}"
+  [ -n "$lan_ip" ] || return 0
 
   dnsmasq_section=$(uci show dhcp 2>/dev/null | awk -F'[.=]' '/=dnsmasq$/ {print $2; exit}')
   [ -n "$dnsmasq_section" ] || return 0
 
   for host in yushu-router ysrouter; do
     uci -q del_list dhcp.${dnsmasq_section}.cname=${host},yushu-router 2>/dev/null || true
-    for stale_ip in $DEFAULT_LAN_IP $LEGACY_DEFAULT_LAN_IPS "$lan_ip"; do
+    for stale_ip in $DEFAULT_LAN_IP $LEGACY_DEFAULT_LAN_IPS "$raw_lan_ip" "$lan_ip"; do
       [ -n "$stale_ip" ] || continue
       uci -q del_list dhcp.${dnsmasq_section}.address=/${host}/${stale_ip} 2>/dev/null || true
       uci -q del_list dhcp.${dnsmasq_section}.address=/${host}.lan/${stale_ip} 2>/dev/null || true
