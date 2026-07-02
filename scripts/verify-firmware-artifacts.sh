@@ -1424,7 +1424,8 @@ verify_uci_defaults_boot_semantics() {
   if ! grep -Fq 'DEFAULT_LAN_IP="10.10.10.1"' "$tmp" || \
      ! grep -Fq '192.168.1.1' "$tmp" || \
      ! grep -Fq 'network.lan.ipaddr="$DEFAULT_LAN_IP"' "$tmp" || \
-     ! grep -Fq 'address=/yushu-router/${lan_ip}' "$tmp"; then
+     ! grep -Fq 'address=/yushu-router/${lan_ip}' "$tmp" || \
+     ! grep -Fq 'RC_COMMON="/rom/etc/rc.common"' "$tmp"; then
     rm -f "$tmp"
     echo "✗ ERROR: /etc/uci-defaults/95-yushu-default-lan does not pin LAN and router DNS defaults"
     exit 1
@@ -1572,6 +1573,7 @@ verify_uci_defaults_boot_semantics() {
   if ! grep -Fq 'wan_is_healthy()' "$tmp" || \
      ! grep -Fq 'gateway_l2_ok()' "$tmp" || \
      ! grep -Fq 'candidate_is_safe()' "$tmp" || \
+     ! grep -Fq 'reload_network_config()' "$tmp" || \
      ! grep -Fq 'set_br_lan_ports_for_candidate()' "$tmp" || \
      ! grep -Fq 'PHYSICAL_WAN="${YUSHU_WAN_AUTOFIT_PHYSICAL_WAN:-wan}"' "$tmp"; then
     rm -f "$tmp"
@@ -1585,6 +1587,27 @@ verify_uci_defaults_boot_semantics() {
 
 verify_rom_rc_common_runtime_calls() {
   local tmp=""
+
+  tmp=$(mktemp /tmp/rootfs-default-lan-runtime.XXXXXX)
+  if ! extract_rootfs_member "etc/uci-defaults/95-yushu-default-lan" "$tmp"; then
+    rm -f "$tmp"
+    echo "✗ ERROR: failed to extract /etc/uci-defaults/95-yushu-default-lan for runtime-call verification"
+    exit 1
+  fi
+
+  if ! grep -Fq 'RC_COMMON="/rom/etc/rc.common"' "$tmp"; then
+    rm -f "$tmp"
+    echo "✗ ERROR: /etc/uci-defaults/95-yushu-default-lan does not pin init-script calls to /rom/etc/rc.common"
+    exit 1
+  fi
+
+  if grep -Eq '(^|[^/])/etc/init\.d/(network|dnsmasq) (reload|restart)' "$tmp"; then
+    rm -f "$tmp"
+    echo "✗ ERROR: /etc/uci-defaults/95-yushu-default-lan still directly executes init scripts that depend on /etc/rc.common"
+    exit 1
+  fi
+
+  rm -f "$tmp"
 
   tmp=$(mktemp /tmp/rootfs-ath11k.XXXXXX)
   if ! extract_rootfs_member "etc/uci-defaults/96-ath11k-mac80211-compat" "$tmp"; then

@@ -231,6 +231,11 @@ wait_wan_healthy() {
   wan_is_healthy "$dev"
 }
 
+reload_network_config() {
+  ubus call network reload >/dev/null 2>&1 || /etc/init.d/network reload >/dev/null 2>&1 || true
+  sleep 2
+}
+
 apply_candidate_config() {
   local candidate="$1"
   local br_section="$2"
@@ -243,6 +248,7 @@ apply_candidate_config() {
   fi
   uci commit network
 
+  reload_network_config
   ip link set dev "$candidate" up 2>/dev/null || true
   ifdown wan >/dev/null 2>&1 || true
   ifup lan >/dev/null 2>&1 || true
@@ -262,6 +268,8 @@ restore_original_config() {
   fi
   restore_br_lan_ports "$br_section" "$orig_ports"
   uci commit network
+
+  reload_network_config
   ifdown wan >/dev/null 2>&1 || true
   ifup lan >/dev/null 2>&1 || true
   ifup wan >/dev/null 2>&1 || true

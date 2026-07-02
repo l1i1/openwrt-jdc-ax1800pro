@@ -3,9 +3,25 @@
 DEFAULT_LAN_IP="10.10.10.1"
 DEFAULT_LAN_NETMASK="255.255.255.0"
 LEGACY_DEFAULT_LAN_IPS="192.168.1.1 192.168.2.1"
+RC_COMMON="/rom/etc/rc.common"
 
 log_msg() {
   logger -t "yushu-default-lan" "$1" 2>/dev/null || true
+}
+
+run_init_script() {
+  local name="$1"
+  shift
+  local script="/etc/init.d/$name"
+
+  [ -f "$script" ] || return 127
+
+  if [ -f "$RC_COMMON" ]; then
+    /bin/sh "$RC_COMMON" "$script" "$@"
+    return $?
+  fi
+
+  "$script" "$@"
 }
 
 is_legacy_default_lan_ip() {
@@ -67,11 +83,11 @@ if is_legacy_default_lan_ip "$current_lan_ip"; then
   uci set network.lan.netmask="$DEFAULT_LAN_NETMASK"
   uci commit network
   sync_router_dns_records "$DEFAULT_LAN_IP"
-  /etc/init.d/network reload 2>/dev/null || true
-  /etc/init.d/dnsmasq restart 2>/dev/null || true
+  run_init_script network reload 2>/dev/null || true
+  run_init_script dnsmasq restart 2>/dev/null || true
 else
   sync_router_dns_records "$current_lan_ip"
-  /etc/init.d/dnsmasq restart 2>/dev/null || true
+  run_init_script dnsmasq restart 2>/dev/null || true
 fi
 
 exit 0
