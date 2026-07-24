@@ -563,10 +563,10 @@ jobs:
             openwrt/build_dir/host
             openwrt/build_dir/hostpkg
             openwrt/build_dir/toolchain-*
-          key: ${{ runner.os }}-openwrt-toolchain-${{ steps.openwrt_ref.outputs.commit }}-${{ steps.cache_fingerprint.outputs.toolchain_config_hash }}-${{ steps.cache_fingerprint.outputs.toolchain_hash }}
+          key: ${{ runner.os }}-openwrt-toolchain-v3-${{ steps.openwrt_ref.outputs.commit }}-${{ steps.cache_fingerprint.outputs.toolchain_config_hash }}-${{ steps.cache_fingerprint.outputs.toolchain_hash }}
           restore-keys: |
-            ${{ runner.os }}-openwrt-toolchain-${{ steps.openwrt_ref.outputs.commit }}-
-            ${{ runner.os }}-openwrt-toolchain-
+            ${{ runner.os }}-openwrt-toolchain-v3-${{ steps.openwrt_ref.outputs.commit }}-
+            ${{ runner.os }}-openwrt-toolchain-v3-
 
       - name: Restore target/package cache
         id: target_package_cache
@@ -669,6 +669,24 @@ jobs:
         id: compile_kernel
         run: |
           cd openwrt
+          if [ ! -x staging_dir/host/bin/m4 ]; then
+            echo "OpenWrt host m4 is missing; using the runner-provided m4."
+            mkdir -p staging_dir/host/bin
+            ln -sf "$(command -v m4)" staging_dir/host/bin/m4
+          fi
+          test -x staging_dir/host/bin/m4
+
+          if ! find staging_dir/toolchain-* -type f -name '*-gcc' -perm -111 -print -quit 2>/dev/null | grep -q .; then
+            echo "OpenWrt cross-toolchain is missing; rebuilding it before kernel compilation."
+            rm -rf staging_dir/toolchain-* build_dir/toolchain-*
+            make toolchain/install -j$(nproc) V=s || make toolchain/install -j1 V=s
+          fi
+
+          if ! find staging_dir/toolchain-* -type f -name '*-gcc' -perm -111 -print -quit 2>/dev/null | grep -q .; then
+            echo "ERROR: OpenWrt cross-toolchain is still unavailable after rebuild." >&2
+            exit 1
+          fi
+
           echo "ccache stats before kernel compile:"
           ccache -s || true
           echo -e "$(nproc) thread kernel compile"
@@ -1420,10 +1438,10 @@ jobs:
             openwrt/build_dir/host
             openwrt/build_dir/hostpkg
             openwrt/build_dir/toolchain-*
-          key: ${{ runner.os }}-openwrt-toolchain-${{ steps.openwrt_ref.outputs.commit }}-${{ steps.cache_fingerprint.outputs.toolchain_config_hash }}-${{ steps.cache_fingerprint.outputs.toolchain_hash }}
+          key: ${{ runner.os }}-openwrt-toolchain-v3-${{ steps.openwrt_ref.outputs.commit }}-${{ steps.cache_fingerprint.outputs.toolchain_config_hash }}-${{ steps.cache_fingerprint.outputs.toolchain_hash }}
           restore-keys: |
-            ${{ runner.os }}-openwrt-toolchain-${{ steps.openwrt_ref.outputs.commit }}-
-            ${{ runner.os }}-openwrt-toolchain-
+            ${{ runner.os }}-openwrt-toolchain-v3-${{ steps.openwrt_ref.outputs.commit }}-
+            ${{ runner.os }}-openwrt-toolchain-v3-
 
       - name: Restore target/package cache
         id: target_package_cache
