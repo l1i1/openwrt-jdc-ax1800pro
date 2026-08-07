@@ -10,7 +10,8 @@ SERVICE_NAME="mgrserver"
 DEFAULT_APP_DIR="/root/mgrserver"
 PIDFILE="/var/run/${SERVICE_NAME}.pid"
 HEALTH_CHECK_INTERVAL=30
-HEALTH_CHECK_URL="http://127.0.0.1:%s/api/health"
+HEALTH_CHECK_URL="http://127.0.0.1:%s/api/config"
+HEALTH_CHECK_PATTERN='"hardwareId"'
 LOG_DIR="/var/log/mgrserver"
 MAX_LOG_SIZE="2M"
 MAX_LOG_FILES=5
@@ -79,12 +80,12 @@ do_health_check() {
   for i in $(seq 1 $max_retries); do
     if command -v curl >/dev/null 2>&1; then
       response="$(curl -fsS --connect-timeout 5 --max-time 10 "$url" 2>/dev/null || true)"
-      if printf '%s' "$response" | grep -Eq '"ok"[[:space:]]*:[[:space:]]*true'; then
+      if printf '%s' "$response" | grep -Fq "$HEALTH_CHECK_PATTERN"; then
         return 0
       fi
     elif command -v wget >/dev/null 2>&1; then
       response="$(wget -q -T 10 -O - "$url" 2>/dev/null || true)"
-      if printf '%s' "$response" | grep -Eq '"ok"[[:space:]]*:[[:space:]]*true'; then
+      if printf '%s' "$response" | grep -Fq "$HEALTH_CHECK_PATTERN"; then
         return 0
       fi
     else
@@ -221,7 +222,7 @@ start_service() {
   procd_set_param pidfile "$PIDFILE"
   
   # Respawn with limits: retry 5 times within 300 seconds
-  procd_set_param respawn ${respawn_threshold:-3600} ${respawn_timeout:-5} ${respawn_retry:-5}
+  procd_set_param respawn ${respawn_threshold:-300} ${respawn_timeout:-5} ${respawn_retry:-5}
   
   # Enable stdout/stderr logging
   procd_set_param stdout 1

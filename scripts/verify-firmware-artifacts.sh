@@ -1331,9 +1331,9 @@ verify_mgrserver_health_check() {
     exit 1
   fi
 
-  if ! grep -Fq 'HEALTH_CHECK_URL="http://127.0.0.1:%s/api/health"' "$tmp"; then
+  if ! grep -Fq 'HEALTH_CHECK_URL="http://127.0.0.1:%s/api/config"' "$tmp"; then
     rm -f "$tmp"
-    echo "✗ ERROR: /etc/init.d/mgrserver does not target /api/health"
+    echo "✗ ERROR: /etc/init.d/mgrserver does not target lightweight /api/config liveness"
     exit 1
   fi
 
@@ -1343,14 +1343,20 @@ verify_mgrserver_health_check() {
     exit 1
   fi
 
-  if ! grep -Eq '"ok".*true|jsonfilter[^[:cntrl:]]*ok|json_(load|select|get_var)' "$tmp"; then
+  if ! grep -Fq 'HEALTH_CHECK_PATTERN=' "$tmp" || ! grep -Fq 'grep -Fq "$HEALTH_CHECK_PATTERN"' "$tmp"; then
     rm -f "$tmp"
-    echo "✗ ERROR: /etc/init.d/mgrserver health checks do not validate the JSON ok=true response"
+    echo "✗ ERROR: /etc/init.d/mgrserver liveness check does not validate the config response"
+    exit 1
+  fi
+
+  if ! grep -Fq 'respawn ${respawn_threshold:-300} ${respawn_timeout:-5} ${respawn_retry:-5}' "$tmp"; then
+    rm -f "$tmp"
+    echo "✗ ERROR: /etc/init.d/mgrserver does not use the documented five-minute respawn window"
     exit 1
   fi
 
   rm -f "$tmp"
-  echo "✓ /etc/init.d/mgrserver uses the expected /api/health JSON health check"
+  echo "✓ /etc/init.d/mgrserver uses the lightweight config liveness check"
 }
 
 verify_health_check_script() {
@@ -1748,6 +1754,12 @@ verify_rom_rc_common_runtime_calls() {
   if grep -Fq '/etc/init.d/mgrserver health_check' "$tmp" || grep -Fq '/etc/init.d/mgrserver restart' "$tmp"; then
     rm -f "$tmp"
     echo "✗ ERROR: /usr/bin/service-watchdog still directly executes /etc/init.d/mgrserver"
+    exit 1
+  fi
+
+  if ! sed -n '/^restart_service()/,/^}/p' "$tmp" | grep -Fq 'run_init_script "$name" "$check_action"'; then
+    rm -f "$tmp"
+    echo "✗ ERROR: /usr/bin/service-watchdog does not verify service health after restart"
     exit 1
   fi
 

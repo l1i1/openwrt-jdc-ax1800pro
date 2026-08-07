@@ -83,11 +83,19 @@ check_service() {
 restart_service() {
   local name="$1"
   local start_action="$2"
+  local check_action="$3"
 
   log "info" "$name: attempting restart"
 
   if run_init_script "$name" "$start_action" >/dev/null 2>&1; then
-    log "info" "$name: restart successful"
+    if [ -n "$check_action" ]; then
+      sleep 2
+      if ! run_init_script "$name" "$check_action" >/dev/null 2>&1; then
+        log "err" "$name: restart command completed but health check failed"
+        return 1
+      fi
+    fi
+    log "info" "$name: restart successful and healthy"
     return 0
   else
     log "err" "$name: restart failed"
@@ -110,7 +118,7 @@ main() {
 
     if ! check_service "$name" "$pidfile" "$check_action"; then
       log "warn" "$name: service unhealthy, restarting..."
-      restart_service "$name" "$start_action"
+      restart_service "$name" "$start_action" "$check_action"
     fi
   done
 
