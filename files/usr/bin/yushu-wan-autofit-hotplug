@@ -2,6 +2,7 @@
 
 LOG_TAG="yushu-wan-autofit-hotplug"
 AUTOFIT="/usr/bin/yushu-wan-autofit"
+LOCK_DIR="/tmp/yushu-wan-autofit.lock"
 PENDING_DIR="/tmp/yushu-wan-autofit.hotplug.pending"
 DEFAULT_CANDIDATES="wan lan1 lan2 lan3"
 
@@ -34,6 +35,11 @@ done
 
 [ "$should_probe" = "1" ] || exit 0
 
+if [ -d "$LOCK_DIR" ]; then
+  log_msg "auto-fit is already active; skipping ${action:-unknown} event"
+  exit 0
+fi
+
 delay="${YUSHU_WAN_AUTOFIT_HOTPLUG_DELAY_SECONDS:-8}"
 case "$delay" in
   ""|*[!0-9]*) delay=8 ;;
@@ -44,9 +50,14 @@ if ! mkdir "$PENDING_DIR" 2>/dev/null; then
 fi
 
 (
+  cleanup() {
+    rmdir "$PENDING_DIR" 2>/dev/null || true
+  }
+
+  trap cleanup EXIT INT TERM
   sleep "$delay"
-  rmdir "$PENDING_DIR" 2>/dev/null || true
-  "$AUTOFIT" --force
+  [ -d "$LOCK_DIR" ] && exit 0
+  "$AUTOFIT" --once
 ) >/dev/null 2>&1 &
 
 log_msg "scheduled WAN auto-fit after ${action:-unknown} event interface=${event_name:-unknown} device=${event_dev:-unknown}"

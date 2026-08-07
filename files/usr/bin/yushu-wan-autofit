@@ -352,6 +352,7 @@ try_candidate() {
   candidate_is_safe "$candidate" || return 1
 
   log_msg "trying WAN candidate $candidate"
+  candidate_applied=1
   apply_candidate_config "$candidate" "$br_section"
 
   if wait_wan_healthy "$candidate" "$TRY_WAIT_SECONDS"; then
@@ -373,6 +374,7 @@ main() {
   local candidate=""
   local force_scan=0
   local signature=""
+  local candidate_applied=0
 
   case "$mode" in
     --boot)
@@ -397,6 +399,12 @@ main() {
     exit 0
   fi
 
+  signature="$(candidate_carrier_signature)"
+  if [ "$force_scan" -ne 1 ] && recent_failed_scan_matches "$signature"; then
+    log_msg "skip scan: carrier signature unchanged within ${SCAN_COOLDOWN_SECONDS}s cooldown ($signature)"
+    exit 0
+  fi
+
   if ifup wan >/dev/null 2>&1; then
     wait_wan_healthy "$current" "$CURRENT_WAIT_SECONDS" && {
       clear_failed_scan_state
@@ -406,12 +414,6 @@ main() {
   elif wait_wan_healthy "$current" 4; then
     clear_failed_scan_state
     log_msg "current WAN $current is healthy"
-    exit 0
-  fi
-
-  signature="$(candidate_carrier_signature)"
-  if [ "$force_scan" -ne 1 ] && recent_failed_scan_matches "$signature"; then
-    log_msg "skip scan: carrier signature unchanged within ${SCAN_COOLDOWN_SECONDS}s cooldown ($signature)"
     exit 0
   fi
 
@@ -430,8 +432,12 @@ main() {
     fi
   done
 
-  log_msg "no WAN candidate passed; restoring $orig_wan"
-  restore_original_config "$orig_wan" "$orig_wan6" "$br_section" "$orig_ports"
+  if [ "$candidate_applied" -eq 1 ]; then
+    log_msg "no WAN candidate passed; restoring $orig_wan"
+    restore_original_config "$orig_wan" "$orig_wan6" "$br_section" "$orig_ports"
+  else
+    log_msg "no viable WAN candidate found; leaving network configuration unchanged"
+  fi
   record_failed_scan "$signature"
   exit 1
 }

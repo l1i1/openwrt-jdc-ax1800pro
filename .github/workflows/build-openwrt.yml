@@ -54,6 +54,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Test WAN auto-fit scripts
+        run: bash scripts/test-wan-autofit.sh
+
       - name: Compute base build fingerprint
         id: base_fingerprint
         shell: bash

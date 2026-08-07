@@ -1588,11 +1588,16 @@ verify_uci_defaults_boot_semantics() {
   fi
 
   if ! grep -Fq 'AUTOFIT="/usr/bin/yushu-wan-autofit"' "$tmp" || \
+     ! grep -Fq 'LOCK_DIR="/tmp/yushu-wan-autofit.lock"' "$tmp" || \
      ! grep -Fq 'PENDING_DIR="/tmp/yushu-wan-autofit.hotplug.pending"' "$tmp" || \
      ! grep -Fq 'YUSHU_WAN_AUTOFIT_HOTPLUG_DELAY_SECONDS' "$tmp" || \
-     ! grep -Fq '"$AUTOFIT" --force' "$tmp"; then
+     ! grep -Fq '[ -d "$LOCK_DIR" ]' "$tmp" || \
+     ! grep -Fq 'trap cleanup EXIT INT TERM' "$tmp" || \
+     ! grep -Fq '"$AUTOFIT" --once' "$tmp" || \
+     grep -Fq '"$AUTOFIT" --force' "$tmp" || \
+     grep -A 1 -F 'sleep "$delay"' "$tmp" | grep -Fq 'rmdir "$PENDING_DIR" 2>/dev/null || true'; then
     rm -f "$tmp"
-    echo "✗ ERROR: /usr/bin/yushu-wan-autofit-hotplug does not schedule coalesced forced WAN probes"
+    echo "✗ ERROR: /usr/bin/yushu-wan-autofit-hotplug does not retain pending state and schedule lock-aware once probes"
     exit 1
   fi
 
@@ -1629,9 +1634,31 @@ verify_uci_defaults_boot_semantics() {
      ! grep -Fq 'recent_failed_scan_matches()' "$tmp" || \
      ! grep -Fq 'YUSHU_WAN_AUTOFIT_SCAN_COOLDOWN_SECONDS' "$tmp" || \
      ! grep -Fq 'set_br_lan_ports_for_candidate()' "$tmp" || \
+     ! grep -Fq 'local candidate_applied=0' "$tmp" || \
+     ! grep -Fq 'if [ "$candidate_applied" -eq 1 ]; then' "$tmp" || \
      ! grep -Fq 'PHYSICAL_WAN="${YUSHU_WAN_AUTOFIT_PHYSICAL_WAN:-wan}"' "$tmp"; then
     rm -f "$tmp"
     echo "✗ ERROR: /usr/bin/yushu-wan-autofit does not contain conservative WAN candidate probing"
+    exit 1
+  fi
+
+  if ! awk '
+    /if \[ "\$candidate_applied" -eq 1 \]; then/ { conditional_restore = 1 }
+    conditional_restore && /restore_original_config / { found_restore = 1 }
+    END { exit found_restore ? 0 : 1 }
+  ' "$tmp"; then
+    rm -f "$tmp"
+    echo "✗ ERROR: /usr/bin/yushu-wan-autofit does not restore only after a candidate was applied"
+    exit 1
+  fi
+
+  if ! awk '
+    /recent_failed_scan_matches "\$signature"/ { checked_cooldown = 1 }
+    checked_cooldown && /if ifup wan/ { ifup_after_cooldown = 1 }
+    END { exit ifup_after_cooldown ? 0 : 1 }
+  ' "$tmp"; then
+    rm -f "$tmp"
+    echo "✗ ERROR: /usr/bin/yushu-wan-autofit does not check cooldown before resetting WAN"
     exit 1
   fi
 
