@@ -214,19 +214,28 @@ find_new_part_after_partition() {
 }
 
 sync_pxe_defaults() {
+    local item=''
+    local name=''
+
     [ -d "$PXE_DEFAULTS" ] || return 0
 
     mkdir -p "$PXE_TARGET"
 
-    if [ -f "$PXE_TARGET/config.ini" ] && [ -f "$PXE_TARGET/up_pxe_res.sh" ] && [ -d "$PXE_TARGET/tftpboot" ]; then
-        echo "PXE defaults already present: $PXE_TARGET"
-        return 0
-    fi
+    for item in "$PXE_DEFAULTS"/*; do
+        [ -e "$item" ] || continue
+        name=${item##*/}
 
-    cp -a "$PXE_DEFAULTS"/. "$PXE_TARGET"/ 2>/dev/null \
-        || { echo "Failed to seed PXE defaults from $PXE_DEFAULTS"; return 1; }
+        case "$name" in
+            config.ini|os|winpe)
+                [ -e "$PXE_TARGET/$name" ] && continue
+                ;;
+        esac
 
-    echo "PXE defaults restored: $PXE_DEFAULTS -> $PXE_TARGET"
+        cp -a "$item" "$PXE_TARGET/" 2>/dev/null \
+            || { echo "Failed to sync PXE default: $item"; return 1; }
+    done
+
+    echo "PXE managed defaults synchronized: $PXE_DEFAULTS -> $PXE_TARGET"
     return 0
 }
 

@@ -987,6 +987,28 @@ verify_pxe_defaults_runtime_assets() {
   fi
   rm -f "$tmp"
 
+  tmp=$(mktemp /tmp/rootfs-pxe-home-sync.XXXXXX)
+  if ! extract_rootfs_member "etc/uci-defaults/98-home-partition" "$tmp"; then
+    rm -f "$tmp"
+    echo "✗ ERROR: failed to extract PXE runtime default synchronization"
+    exit 1
+  fi
+
+  if grep -Fq 'PXE defaults already present: $PXE_TARGET' "$tmp"; then
+    rm -f "$tmp"
+    echo "✗ ERROR: PXE runtime sync still skips firmware-managed asset updates"
+    exit 1
+  fi
+
+  if ! grep -Fq 'for item in "$PXE_DEFAULTS"/*; do' "$tmp" || \
+     ! grep -Fq 'config.ini|os|winpe)' "$tmp" || \
+     ! grep -Fq 'cp -a "$item" "$PXE_TARGET/"' "$tmp"; then
+    rm -f "$tmp"
+    echo "✗ ERROR: PXE runtime sync does not refresh managed assets while preserving runtime data"
+    exit 1
+  fi
+  rm -f "$tmp"
+
   tmp=$(mktemp /tmp/rootfs-pxe-set.XXXXXX)
   if ! extract_rootfs_member "usr/share/mgrserver-defaults/res/pxe/set_pxe.sh" "$tmp"; then
     rm -f "$tmp"
@@ -1027,7 +1049,7 @@ verify_pxe_defaults_runtime_assets() {
   fi
 
   rm -f "$tmp"
-  echo "✓ PXE defaults include pe-menu.exe download metadata and guarded bootfile selection"
+  echo "✓ PXE defaults refresh managed runtime assets and include guarded bootfile selection"
 }
 
 verify_mac80211_runtime_compat() {
