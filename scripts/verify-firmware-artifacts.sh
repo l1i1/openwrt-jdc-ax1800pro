@@ -673,6 +673,41 @@ require_rootfs_entry() {
   fi
 }
 
+verify_mgrserver_identity() {
+  local expected="${EXPECTED_MGRSERVER_COMMIT:-}"
+  local bundle_tmp=""
+  local version_tmp=""
+
+  if [ -z "$expected" ]; then
+    echo "! MgrServer identity check skipped: EXPECTED_MGRSERVER_COMMIT is unset"
+    return 0
+  fi
+
+  bundle_tmp=$(mktemp /tmp/rootfs-mgrserver-bundle.XXXXXX)
+  version_tmp=$(mktemp /tmp/rootfs-mgrserver-version.XXXXXX)
+  if ! extract_rootfs_member "root/mgrserver/bundle/index.cjs" "$bundle_tmp" || \
+     ! extract_rootfs_member "etc/mgrserver/firmware_version" "$version_tmp"; then
+    rm -f "$bundle_tmp" "$version_tmp"
+    echo "✗ ERROR: failed to extract MgrServer identity files from verified rootfs"
+    exit 1
+  fi
+
+  if ! grep -aFq "${expected}-" "$bundle_tmp"; then
+    rm -f "$bundle_tmp" "$version_tmp"
+    echo "✗ ERROR: verified rootfs MgrServer bundle does not contain expected commit $expected"
+    exit 1
+  fi
+
+  if ! grep -Fxq "$expected" "$version_tmp"; then
+    rm -f "$bundle_tmp" "$version_tmp"
+    echo "✗ ERROR: verified rootfs firmware_version does not match MgrServer commit $expected"
+    exit 1
+  fi
+
+  rm -f "$bundle_tmp" "$version_tmp"
+  echo "✓ verified rootfs contains MgrServer commit $expected"
+}
+
 rootfs_mode_for_entry() {
   local rel="$1"
   [ -n "$ROOTFS_LIST_FILE" ] || return 1
@@ -932,6 +967,7 @@ require_rootfs_entry "usr/share/mgrserver-defaults/res/pxe/tftpboot"
 require_rootfs_entry "usr/share/mgrserver-defaults/res/pxe/res/pe-menu.exe"
 require_rootfs_entry "root/mgrserver/commands.json"
 require_rootfs_entry "root/mgrserver/web-dist/index.html"
+require_rootfs_entry "etc/mgrserver/firmware_version"
 require_rootfs_entry "usr/bin/node"
 require_rootfs_entry "usr/bin/npm"
 require_rootfs_any "curl binary" "usr/bin/curl" "bin/curl"
@@ -1901,6 +1937,7 @@ verify_pxe_download_engine() {
 verify_rcs_boot_wrapper
 verify_preinit_overlay_boot_repair
 verify_mgrserver_health_check
+verify_mgrserver_identity
 verify_flow_offload_guard
 verify_mgrserver_flow_offload_guard
 verify_health_check_script

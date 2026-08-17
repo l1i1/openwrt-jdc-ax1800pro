@@ -17,9 +17,9 @@ on:
         required: false
         default: "l1i1/MgrServer"
       mgrserver_branch:
-        description: "MgrServer branch"
+        description: "MgrServer branch (empty: use the OpenWrt branch when it exists, otherwise main)"
         required: false
-        default: "main"
+        default: ""
 
 env:
   REPO_URL: https://github.com/l1i1/immortalwrt
@@ -210,6 +210,7 @@ jobs:
     timeout-minutes: 30
     outputs:
       mgrserver_commit: ${{ steps.mgrserver_ref.outputs.commit }}
+      mgrserver_branch: ${{ steps.mgrserver_ref.outputs.branch }}
       release_tag: ${{ steps.firmware_release.outputs.release_tag }}
       firmware_version_code: ${{ steps.firmware_release.outputs.firmware_version_code }}
     steps:
@@ -220,11 +221,26 @@ jobs:
         id: mgrserver_ref
         env:
           MGRSERVER_REPO: ${{ github.event.inputs.mgrserver_repo || 'l1i1/MgrServer' }}
-          MGRSERVER_BRANCH: ${{ github.event.inputs.mgrserver_branch || 'main' }}
+          MGRSERVER_BRANCH_INPUT: ${{ github.event.inputs.mgrserver_branch || github.event.client_payload.mgrserver_branch || '' }}
+          OPENWRT_BRANCH: ${{ github.ref_name }}
+          MGRSERVER_TOKEN: ${{ secrets.MGRSERVER_TOKEN }}
         run: |
+          set -euo pipefail
+          MGRSERVER_REMOTE="https://x-access-token:${MGRSERVER_TOKEN}@github.com/${MGRSERVER_REPO}.git"
+          MGRSERVER_BRANCH="$MGRSERVER_BRANCH_INPUT"
+          if [ -z "$MGRSERVER_BRANCH" ]; then
+            MGRSERVER_BRANCH="main"
+            if [ -n "${OPENWRT_BRANCH:-}" ] && [ "$OPENWRT_BRANCH" != "main" ] && \
+              git ls-remote --exit-code --heads "$MGRSERVER_REMOTE" "refs/heads/$OPENWRT_BRANCH" >/dev/null 2>&1; then
+              MGRSERVER_BRANCH="$OPENWRT_BRANCH"
+              echo "Using matching MgrServer branch: $MGRSERVER_BRANCH"
+            else
+              echo "No matching MgrServer branch for ${OPENWRT_BRANCH:-<unknown>}; using main"
+            fi
+          fi
           echo "Cloning MgrServer from ${MGRSERVER_REPO}@${MGRSERVER_BRANCH}..."
           git clone --depth=1 --branch "$MGRSERVER_BRANCH" \
-            "https://x-access-token:${{ secrets.MGRSERVER_TOKEN }}@github.com/${MGRSERVER_REPO}.git" "$GITHUB_WORKSPACE/mgrserver-src"
+            "$MGRSERVER_REMOTE" "$GITHUB_WORKSPACE/mgrserver-src"
           echo "repo=${MGRSERVER_REPO}" >> "$GITHUB_OUTPUT"
           echo "branch=${MGRSERVER_BRANCH}" >> "$GITHUB_OUTPUT"
           echo "commit=$(git -C "$GITHUB_WORKSPACE/mgrserver-src" rev-parse HEAD)" >> "$GITHUB_OUTPUT"
@@ -273,6 +289,7 @@ jobs:
           name: mgrserver-overlay-${{ github.run_number }}
           path: |
             ${{ github.workspace }}/files/root/mgrserver/
+            ${{ github.workspace }}/files/etc/mgrserver/firmware_version
             ${{ github.workspace }}/files/usr/share/mgrserver-defaults/
           retention-days: 1
 
@@ -880,7 +897,7 @@ jobs:
       - name: Set MgrServer source env
         run: |
           echo "MGRSERVER_REPO=${{ github.event.inputs.mgrserver_repo || 'l1i1/MgrServer' }}" >> $GITHUB_ENV
-          echo "MGRSERVER_BRANCH=${{ github.event.inputs.mgrserver_branch || 'main' }}" >> $GITHUB_ENV
+          echo "MGRSERVER_BRANCH=${{ needs.build_mgrserver.outputs.mgrserver_branch }}" >> $GITHUB_ENV
 
       - name: Create OpenWrt workspace symlink
         run: |
@@ -1546,6 +1563,10 @@ jobs:
             mkdir -p "$OPENWRT_ROOT/files/root/mgrserver"
             cp -a "$MGRSERVER_OVERLAY/root/mgrserver/." "$OPENWRT_ROOT/files/root/mgrserver/"
           fi
+          if [ -d "$MGRSERVER_OVERLAY/etc/mgrserver" ]; then
+            mkdir -p "$OPENWRT_ROOT/files/etc/mgrserver"
+            cp -a "$MGRSERVER_OVERLAY/etc/mgrserver/." "$OPENWRT_ROOT/files/etc/mgrserver/"
+          fi
           if [ -d "$MGRSERVER_OVERLAY/usr/share/mgrserver-defaults" ]; then
             mkdir -p "$OPENWRT_ROOT/files/usr/share/mgrserver-defaults"
             cp -a "$MGRSERVER_OVERLAY/usr/share/mgrserver-defaults/." "$OPENWRT_ROOT/files/usr/share/mgrserver-defaults/"
@@ -1558,7 +1579,27 @@ jobs:
 
           echo "MgrServer overlay applied to OpenWrt files:"
           du -sh "$OPENWRT_ROOT/files/root/mgrserver/" 2>/dev/null || true
+          test -s "$OPENWRT_ROOT/files/etc/mgrserver/firmware_version"
           du -sh "$OPENWRT_ROOT/files/usr/share/mgrserver-defaults/" 2>/dev/null || true
+
+      - name: Verify MgrServer overlay identity
+        env:
+          EXPECTED_MGRSERVER_COMMIT: ${{ needs.build_mgrserver.outputs.mgrserver_commit }}
+        run: |
+          set -euo pipefail
+          bundle="$GITHUB_WORKSPACE/openwrt/files/root/mgrserver/bundle/index.cjs"
+          expected="$EXPECTED_MGRSERVER_COMMIT"
+          test -n "$expected"
+          test -s "$bundle"
+          if ! grep -aFq "${expected}-" "$bundle"; then
+            echo "ERROR: staged MgrServer bundle does not contain expected build commit $expected" >&2
+            exit 1
+          fi
+          if ! grep -Fxq "$expected" "$GITHUB_WORKSPACE/openwrt/files/etc/mgrserver/firmware_version"; then
+            echo "ERROR: staged firmware_version does not match MgrServer commit $expected" >&2
+            exit 1
+          fi
+          echo "MgrServer overlay identity verified: $expected"
 
       - name: Load custom files overlay
         run: |
@@ -1897,6 +1938,8 @@ jobs:
       - name: Verify firmware files
         id: verify
         if: steps.organize.outputs.status == 'success' && !cancelled()
+        env:
+          EXPECTED_MGRSERVER_COMMIT: ${{ needs.build_mgrserver.outputs.mgrserver_commit }}
         run: bash "$GITHUB_WORKSPACE/scripts/verify-firmware-artifacts.sh" "${{ env.FIRMWARE }}"
 
       - name: Upload firmware directory
