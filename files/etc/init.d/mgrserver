@@ -15,6 +15,7 @@ HEALTH_CHECK_PATTERN='"hardwareId"'
 LOG_DIR="/var/log/mgrserver"
 MAX_LOG_SIZE="2M"
 MAX_LOG_FILES=5
+RUNTIME_DIR="/home/mgrserver"
 
 # Logging helper
 log_msg() {
@@ -45,6 +46,17 @@ setup_logging() {
   mkdir -p "$LOG_DIR"
   chown root:root "$LOG_DIR"
   chmod 755 "$LOG_DIR"
+}
+
+log_previous_runtime() {
+  local runtime_file="${RUNTIME_DIR}/last-exit.json"
+  [ -f "$runtime_file" ] || return 0
+  local status reason pid boot_id
+  status="$(sed -n 's/.*"status"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$runtime_file" | head -n 1)"
+  reason="$(sed -n 's/.*"reason"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$runtime_file" | head -n 1)"
+  pid="$(sed -n 's/.*"pid"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p' "$runtime_file" | head -n 1)"
+  boot_id="$(sed -n 's/.*"bootId"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$runtime_file" | head -n 1)"
+  log_msg "info" "Previous runtime status=${status:-unknown} reason=${reason:-unknown} pid=${pid:-unknown} boot_id=${boot_id:-unknown}"
 }
 
 ensure_flow_offload_disabled() {
@@ -184,6 +196,7 @@ validate_config() {
 
 start_service() {
   setup_logging
+  log_previous_runtime
   ensure_flow_offload_disabled
   
   config_load mgrserver
@@ -228,8 +241,8 @@ start_service() {
   procd_set_param stdout 1
   procd_set_param stderr 1
   
-  # Set process limits
-  procd_set_param limits core="unlimited" nofile="65535 65535"
+  # Do not retain multi-hundred-megabyte Node core files on production routers.
+  procd_set_param limits core="0" nofile="65535 65535"
 
   # Build command with environment
   cmd=""
@@ -239,6 +252,7 @@ start_service() {
   cmd="$cmd STATIC_DIR=$(quote_sh "$static_dir")"
   cmd="$cmd MGMT_COMMANDS_FILE=$(quote_sh "$commands_file")"
   cmd="$cmd LOG_LEVEL=$(quote_sh "$log_level")"
+  cmd="$cmd MGRSERVER_RUNTIME_DIR=$(quote_sh "$RUNTIME_DIR")"
 
   [ -n "$mgmt_password" ] && cmd="$cmd MGMT_PASSWORD=$(quote_sh "$mgmt_password")"
   [ -n "$cors_origins" ] && cmd="$cmd CORS_ORIGINS=$(quote_sh "$cors_origins")"
@@ -260,6 +274,7 @@ stop_service() {
   local pid
 
   log_msg "info" "Stopping MgrServer"
+  log_previous_runtime
 
   procd_kill "$SERVICE_NAME" "instance1" >/dev/null 2>&1 || true
 

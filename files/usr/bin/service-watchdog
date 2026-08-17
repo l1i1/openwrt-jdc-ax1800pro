@@ -1,15 +1,17 @@
 #!/bin/sh
 # Service Watchdog Script for OpenWrt
-# Monitors critical services and restarts them if they fail
+# A single failed probe is recorded, not restarted. Two consecutive failures
+# are required so a transient health-check timeout cannot restart MgrServer.
 
 LOG_TAG="service-watchdog"
 LOG_FILE="/var/log/service-watchdog.log"
-MAX_LOG_SIZE="512K"
-MAX_LOG_FILES=3
+STATE_DIR="/var/run/service-watchdog"
+LOCK_DIR="/var/run/service-watchdog.lock"
+FAILURE_THRESHOLD=2
+RESTART_COOLDOWN_SEC=600
 RC_COMMON="/rom/etc/rc.common"
 
 # Services to monitor: name:pidfile:check_action:start_action
-# Delegate health verification to the init script so custom ports stay in sync.
 SERVICES="mgrserver:/var/run/mgrserver.pid:health_check:restart"
 
 log() {
@@ -17,15 +19,15 @@ log() {
   shift
   local msg="$*"
   logger -t "$LOG_TAG" -p "daemon.$level" "$msg"
-  
-  # Rotate log if needed
+
   if [ -f "$LOG_FILE" ]; then
-    local size=$(du -k "$LOG_FILE" 2>/dev/null | cut -f1)
+    local size
+    size=$(du -k "$LOG_FILE" 2>/dev/null | cut -f1)
     if [ -n "$size" ] && [ "$size" -gt 512 ]; then
       mv "$LOG_FILE" "$LOG_FILE.1" 2>/dev/null
     fi
   fi
-  
+
   echo "$(date '+%Y-%m-%d %H:%M:%S') [$level] $msg" >> "$LOG_FILE"
 }
 
@@ -35,80 +37,129 @@ run_init_script() {
   local script="/etc/init.d/$name"
 
   [ -f "$script" ] || return 127
-
   if [ -f "$RC_COMMON" ]; then
     /bin/sh "$RC_COMMON" "$script" "$@"
     return $?
   fi
-
   "$script" "$@"
 }
 
-# Check if a service is healthy
+read_pid() {
+  local pidfile="$1"
+  local pid=""
+  [ -f "$pidfile" ] || return 0
+  pid=$(cat "$pidfile" 2>/dev/null || true)
+  case "$pid" in
+    ''|*[!0-9]*) return 0 ;;
+    *) printf '%s\n' "$pid" ;;
+  esac
+}
+
+pid_running() {
+  local pid="$1"
+  [ -n "$pid" ] && [ -d "/proc/$pid" ]
+}
+
+state_file() {
+  printf '%s/%s.state\n' "$STATE_DIR" "$1"
+}
+
+read_failure_state() {
+  local name="$1"
+  failure_count=0
+  failure_reason_previous=""
+  failure_pid=""
+  last_restart_at=0
+  [ -f "$(state_file "$name")" ] || return 0
+  IFS='|' read -r failure_count failure_reason_previous failure_pid last_restart_at < "$(state_file "$name")" || true
+  case "$failure_count" in ''|*[!0-9]*) failure_count=0 ;; esac
+  case "$last_restart_at" in ''|*[!0-9]*) last_restart_at=0 ;; esac
+}
+
+write_failure_state() {
+  local name="$1"
+  local tmp="$(state_file "$name").tmp.$$"
+  mkdir -p "$STATE_DIR"
+  printf '%s|%s|%s|%s\n' "$failure_count" "$failure_reason" "$failure_pid" "$last_restart_at" > "$tmp"
+  mv "$tmp" "$(state_file "$name")"
+}
+
+clear_failure_state() {
+  rm -f "$(state_file "$1")"
+}
+
+runtime_field() {
+  local file="$1"
+  local field="$2"
+  [ -f "$file" ] || return 0
+  sed -n "s/.*\"$field\"[[:space:]]*:[[:space:]]*\"\([^\"]*\)\".*/\1/p" "$file" | head -n 1
+}
+
+# Check if a service is healthy. These globals describe the failure for the
+# caller, keeping the classification explicit in the restart log.
 check_service() {
   local name="$1"
   local pidfile="$2"
   local check_action="$3"
-  local pid_ok=0
+  service_pid="$(read_pid "$pidfile")"
+  failure_reason=""
 
-  # Check if PID file exists and process is running
-  if [ -n "$pidfile" ] && [ -f "$pidfile" ]; then
-    local pid=$(cat "$pidfile")
-    if [ -n "$pid" ] && [ -d "/proc/$pid" ]; then
-      pid_ok=1
-    else
-      log "warn" "$name: PID $pid not running"
-    fi
-  elif [ -n "$pidfile" ]; then
-    log "warn" "$name: PID file not found"
-  fi
-
-  # Run custom health check if provided
-  if [ -n "$check_action" ]; then
-    if run_init_script "$name" "$check_action" >/dev/null 2>&1; then
-      return 0
-    fi
-    log "warn" "$name: health check failed"
+  if ! pid_running "$service_pid"; then
+    failure_reason="service_not_running"
+    log "warn" "$name: service is not running (pid=${service_pid:-none})"
     return 1
   fi
 
-  if [ "$pid_ok" = "1" ]; then
+  if run_init_script "$name" "$check_action" >/dev/null 2>&1; then
     return 0
   fi
-
+  failure_reason="health_check_failed"
+  log "warn" "$name: lightweight health check failed (pid=$service_pid)"
   return 1
 }
 
-# Restart a service
+# Restart and verify the service. The old and new PIDs are recorded so a later
+# crash can be correlated with the process that was actually replaced.
 restart_service() {
   local name="$1"
   local start_action="$2"
   local check_action="$3"
+  local reason="$4"
+  local old_pid="$5"
+  local new_pid=""
+  local runtime_reason="$(runtime_field /home/mgrserver/last-exit.json reason)"
 
-  log "info" "$name: attempting restart"
-
-  if run_init_script "$name" "$start_action" >/dev/null 2>&1; then
-    if [ -n "$check_action" ]; then
-      sleep 2
-      if ! run_init_script "$name" "$check_action" >/dev/null 2>&1; then
-        log "err" "$name: restart command completed but health check failed"
-        return 1
-      fi
-    fi
-    log "info" "$name: restart successful and healthy"
-    return 0
-  else
-    log "err" "$name: restart failed"
+  log "info" "$name: restarting after ${reason} (old_pid=${old_pid:-none}${runtime_reason:+, last_exit=$runtime_reason})"
+  if ! run_init_script "$name" "$start_action" >/dev/null 2>&1; then
+    log "err" "$name: restart command failed (old_pid=${old_pid:-none}, reason=$reason)"
     return 1
   fi
+
+  # procd starts asynchronously; verify liveness and capture the replacement PID.
+  local i
+  for i in $(seq 1 15); do
+    sleep 2
+    new_pid="$(read_pid "/var/run/${name}.pid")"
+    if pid_running "$new_pid" && run_init_script "$name" "$check_action" >/dev/null 2>&1; then
+      log "info" "$name: restart healthy (old_pid=${old_pid:-none}, new_pid=${new_pid:-none}, reason=$reason)"
+      return 0
+    fi
+  done
+
+  log "err" "$name: restart command completed but health check failed (old_pid=${old_pid:-none}, new_pid=${new_pid:-none}, reason=$reason)"
+  return 1
 }
 
-# Main watchdog loop
 main() {
-  log "info" "Service watchdog started"
+  if ! mkdir "$LOCK_DIR" 2>/dev/null; then
+    log "warn" "Another watchdog run is active; skipping this check"
+    return 0
+  fi
+  trap 'rmdir "$LOCK_DIR" 2>/dev/null || true' EXIT INT TERM
 
+  log "info" "Service watchdog check started"
+  local service name rest pidfile check_action start_action now
   for service in $SERVICES; do
-    # Parse service definition (avoid bash here-string)
     name="${service%%:*}"
     rest="${service#*:}"
     pidfile="${rest%%:*}"
@@ -116,14 +167,40 @@ main() {
     check_action="${rest%%:*}"
     start_action="${rest#*:}"
 
-    if ! check_service "$name" "$pidfile" "$check_action"; then
-      log "warn" "$name: service unhealthy, restarting..."
-      restart_service "$name" "$start_action" "$check_action"
+    if check_service "$name" "$pidfile" "$check_action"; then
+      clear_failure_state "$name"
+      continue
+    fi
+
+    read_failure_state "$name"
+    if [ "$failure_reason" != "$failure_reason_previous" ] || [ "$service_pid" != "$failure_pid" ]; then
+      failure_count=1
+    else
+      failure_count=$((failure_count + 1))
+    fi
+    failure_pid="$service_pid"
+    now=$(date +%s)
+
+    if [ "$last_restart_at" -gt 0 ] && [ $((now - last_restart_at)) -lt "$RESTART_COOLDOWN_SEC" ]; then
+      log "warn" "$name: $failure_reason persists but restart is in cooldown (last=$last_restart_at)"
+      write_failure_state "$name"
+      continue
+    fi
+
+    if [ "$failure_count" -lt "$FAILURE_THRESHOLD" ]; then
+      log "warn" "$name: failure $failure_count/$FAILURE_THRESHOLD recorded ($failure_reason)"
+      write_failure_state "$name"
+      continue
+    fi
+
+    if restart_service "$name" "$start_action" "$check_action" "$failure_reason" "$service_pid"; then
+      clear_failure_state "$name"
+    else
+      last_restart_at="$now"
+      write_failure_state "$name"
     fi
   done
-
   log "info" "Service watchdog check completed"
 }
 
-# Run main function
 main "$@"

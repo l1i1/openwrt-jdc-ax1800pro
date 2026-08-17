@@ -1377,6 +1377,18 @@ verify_mgrserver_health_check() {
     exit 1
   fi
 
+  if ! grep -Fq 'procd_set_param limits core="0"' "$tmp" || grep -Fq 'core="unlimited"' "$tmp"; then
+    rm -f "$tmp"
+    echo "✗ ERROR: /etc/init.d/mgrserver must disable unlimited production core dumps"
+    exit 1
+  fi
+
+  if ! grep -Fq 'MGRSERVER_RUNTIME_DIR=' "$tmp"; then
+    rm -f "$tmp"
+    echo "✗ ERROR: /etc/init.d/mgrserver does not configure persistent runtime diagnostics"
+    exit 1
+  fi
+
   rm -f "$tmp"
   echo "✓ /etc/init.d/mgrserver uses the lightweight config liveness check"
 }
@@ -1782,6 +1794,18 @@ verify_rom_rc_common_runtime_calls() {
   if ! sed -n '/^restart_service()/,/^}/p' "$tmp" | grep -Fq 'run_init_script "$name" "$check_action"'; then
     rm -f "$tmp"
     echo "✗ ERROR: /usr/bin/service-watchdog does not verify service health after restart"
+    exit 1
+  fi
+
+  if ! grep -Fq 'FAILURE_THRESHOLD=2' "$tmp" || ! grep -Fq 'RESTART_COOLDOWN_SEC=' "$tmp"; then
+    rm -f "$tmp"
+    echo "✗ ERROR: /usr/bin/service-watchdog lacks consecutive-failure and cooldown guards"
+    exit 1
+  fi
+
+  if ! grep -Fq 'old_pid=' "$tmp" || ! grep -Fq 'new_pid=' "$tmp"; then
+    rm -f "$tmp"
+    echo "✗ ERROR: /usr/bin/service-watchdog does not record old/new PIDs"
     exit 1
   fi
 
