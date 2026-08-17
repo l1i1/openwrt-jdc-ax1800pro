@@ -1862,6 +1862,14 @@ verify_pxe_download_engine() {
     exit 1
   fi
 
+  if ! grep -Fq 'is_active_updater_pid()' "$tmp" || \
+     ! grep -Fq '"/proc/$pid/cmdline"' "$tmp" || \
+     ! grep -Fq '"/up_pxe_res.sh"' "$tmp"; then
+    rm -f "$tmp"
+    echo "✗ ERROR: PXE updater does not validate stale lock PID command lines"
+    exit 1
+  fi
+
   rm -f "$tmp"
   echo "✓ PXE updater uses aria2c instead of wget for remote downloads"
 }
