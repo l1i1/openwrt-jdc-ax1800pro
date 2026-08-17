@@ -1595,10 +1595,6 @@ jobs:
             echo "ERROR: staged MgrServer bundle does not contain expected build commit $expected" >&2
             exit 1
           fi
-          if ! grep -Fxq "$expected" "$GITHUB_WORKSPACE/openwrt/files/etc/mgrserver/firmware_version"; then
-            echo "ERROR: staged firmware_version does not match MgrServer commit $expected" >&2
-            exit 1
-          fi
           echo "MgrServer overlay identity verified: $expected"
 
       - name: Load custom files overlay

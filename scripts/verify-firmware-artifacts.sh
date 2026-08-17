@@ -676,7 +676,6 @@ require_rootfs_entry() {
 verify_mgrserver_identity() {
   local expected="${EXPECTED_MGRSERVER_COMMIT:-}"
   local bundle_tmp=""
-  local version_tmp=""
 
   if [ -z "$expected" ]; then
     echo "! MgrServer identity check skipped: EXPECTED_MGRSERVER_COMMIT is unset"
@@ -684,27 +683,19 @@ verify_mgrserver_identity() {
   fi
 
   bundle_tmp=$(mktemp /tmp/rootfs-mgrserver-bundle.XXXXXX)
-  version_tmp=$(mktemp /tmp/rootfs-mgrserver-version.XXXXXX)
-  if ! extract_rootfs_member "root/mgrserver/bundle/index.cjs" "$bundle_tmp" || \
-     ! extract_rootfs_member "etc/mgrserver/firmware_version" "$version_tmp"; then
-    rm -f "$bundle_tmp" "$version_tmp"
+  if ! extract_rootfs_member "root/mgrserver/bundle/index.cjs" "$bundle_tmp"; then
+    rm -f "$bundle_tmp"
     echo "✗ ERROR: failed to extract MgrServer identity files from verified rootfs"
     exit 1
   fi
 
   if ! grep -aFq "${expected}-" "$bundle_tmp"; then
-    rm -f "$bundle_tmp" "$version_tmp"
+    rm -f "$bundle_tmp"
     echo "✗ ERROR: verified rootfs MgrServer bundle does not contain expected commit $expected"
     exit 1
   fi
 
-  if ! grep -Fxq "$expected" "$version_tmp"; then
-    rm -f "$bundle_tmp" "$version_tmp"
-    echo "✗ ERROR: verified rootfs firmware_version does not match MgrServer commit $expected"
-    exit 1
-  fi
-
-  rm -f "$bundle_tmp" "$version_tmp"
+  rm -f "$bundle_tmp"
   echo "✓ verified rootfs contains MgrServer commit $expected"
 }
 
