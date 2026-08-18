@@ -699,6 +699,35 @@ verify_mgrserver_identity() {
   echo "✓ verified rootfs contains MgrServer commit $expected"
 }
 
+verify_firmware_version() {
+  local expected="${EXPECTED_FIRMWARE_VERSION:-}"
+  local version_tmp=""
+  local actual=""
+
+  if [ -z "$expected" ]; then
+    echo "! Firmware version check skipped: EXPECTED_FIRMWARE_VERSION is unset"
+    return 0
+  fi
+
+  version_tmp=$(mktemp /tmp/rootfs-firmware-version.XXXXXX)
+  if ! extract_rootfs_member "etc/mgrserver/firmware_version" "$version_tmp"; then
+    rm -f "$version_tmp"
+    echo "✗ ERROR: failed to extract firmware version from verified rootfs" >&2
+    exit 1
+  fi
+
+  actual=$(tr -d '\r\n' < "$version_tmp")
+  rm -f "$version_tmp"
+  if [ "$actual" != "$expected" ]; then
+    echo "✗ ERROR: verified rootfs firmware version does not match the MgrServer commit" >&2
+    echo "  expected: $expected" >&2
+    echo "  actual:   $actual" >&2
+    exit 1
+  fi
+
+  echo "✓ verified rootfs firmware version matches MgrServer commit $expected"
+}
+
 rootfs_mode_for_entry() {
   local rel="$1"
   [ -n "$ROOTFS_LIST_FILE" ] || return 1
@@ -1929,6 +1958,7 @@ verify_rcs_boot_wrapper
 verify_preinit_overlay_boot_repair
 verify_mgrserver_health_check
 verify_mgrserver_identity
+verify_firmware_version
 verify_flow_offload_guard
 verify_mgrserver_flow_offload_guard
 verify_health_check_script

@@ -279,6 +279,7 @@ jobs:
         env:
           FIRMWARE_RELEASE_TAG: "${{ steps.firmware_release.outputs.release_tag }}"
           FIRMWARE_VERSION_CODE: "${{ steps.firmware_release.outputs.firmware_version_code }}"
+          FIRMWARE_GIT_SHA: "${{ steps.mgrserver_ref.outputs.commit }}"
           MGRSERVER_BUILD_ID: "${{ steps.mgrserver_ref.outputs.commit }}-${{ github.run_number }}"
           MGRSERVER_VERSION: "${{ steps.mgrserver_version.outputs.version }}"
         run: bash "$GITHUB_WORKSPACE/scripts/stage-mgrserver-overlay.sh"
@@ -1936,6 +1937,7 @@ jobs:
         if: steps.organize.outputs.status == 'success' && !cancelled()
         env:
           EXPECTED_MGRSERVER_COMMIT: ${{ needs.build_mgrserver.outputs.mgrserver_commit }}
+          EXPECTED_FIRMWARE_VERSION: ${{ needs.build_mgrserver.outputs.mgrserver_commit }}
         run: bash "$GITHUB_WORKSPACE/scripts/verify-firmware-artifacts.sh" "${{ env.FIRMWARE }}"
 
       - name: Upload firmware directory

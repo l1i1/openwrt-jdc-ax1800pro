@@ -10,16 +10,16 @@ PXE_DEST="$FILES_ROOT/usr/share/mgrserver-defaults/res/pxe"
 PXE_SRC="$MGRSERVER_SRC/pxe-server"
 FIRMWARE_VERSION_DEST="$FILES_ROOT/etc/mgrserver/firmware_version"
 
-resolve_firmware_git_sha() {
-  local sha="${FIRMWARE_GIT_SHA:-${GITHUB_SHA:-}}"
-  if [ -z "$sha" ]; then
-    sha="$(git -C "$MGRSERVER_SRC" rev-parse HEAD 2>/dev/null || true)"
+resolve_mgrserver_git_sha() {
+  local version="${FIRMWARE_GIT_SHA:-}"
+  if [ -z "$version" ]; then
+    version="$(git -C "$MGRSERVER_SRC" rev-parse HEAD 2>/dev/null || true)"
   fi
-  if ! printf '%s' "$sha" | grep -Eiq '^[0-9a-f]{7,40}$'; then
-    echo "ERROR: unable to resolve firmware git SHA from FIRMWARE_GIT_SHA, GITHUB_SHA, or git rev-parse HEAD" >&2
+  if ! printf '%s' "$version" | grep -Eiq '^[0-9a-f]{7,40}$'; then
+    echo "ERROR: unable to resolve MgrServer git SHA from FIRMWARE_GIT_SHA or the MgrServer source checkout" >&2
     exit 1
   fi
-  printf '%s' "$sha" | tr 'A-F' 'a-f'
+  printf '%s' "$version" | tr 'A-F' 'a-f'
 }
 
 if [ ! -d "$MGRSERVER_SRC" ]; then
@@ -57,10 +57,10 @@ else
   exit 1
 fi
 
-FIRMWARE_GIT_VERSION="$(resolve_firmware_git_sha)"
+FIRMWARE_VERSION="$(resolve_mgrserver_git_sha)"
 mkdir -p "$(dirname "$FIRMWARE_VERSION_DEST")"
-printf '%s\n' "$FIRMWARE_GIT_VERSION" > "$FIRMWARE_VERSION_DEST"
-echo "Firmware git SHA staged: $FIRMWARE_GIT_VERSION"
+printf '%s\n' "$FIRMWARE_VERSION" > "$FIRMWARE_VERSION_DEST"
+echo "Firmware version staged: $FIRMWARE_VERSION"
 
 cd "$MGR_DEST"
 
