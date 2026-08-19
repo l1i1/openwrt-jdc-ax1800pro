@@ -164,9 +164,9 @@ if [ -n "$I18N_EASY_IPK" ]; then
 fi
 rm -rf /tmp/easytier.zip /tmp/easytier-ipk/
 
-SINGBOX_VER="1.13.3"
+SINGBOX_VER="1.13.19"
 SINGBOX_URL="https://github.com/SagerNet/sing-box/releases/download/v${SINGBOX_VER}/sing-box_${SINGBOX_VER}_openwrt_aarch64_cortex-a53.ipk"
-SINGBOX_SHA256="d57cd0ed852269d59a1558c53e3f911769fda2af6c70692b8400a7313623722b"
+SINGBOX_SHA256="55cd213e8f524be4c9ddadc45f2d3202531c6179ba76bee5ecea9d64fd1b251f"
 
 download_with_retry "$SINGBOX_URL" /tmp/sing-box.ipk "$SINGBOX_SHA256"
 extract_ipk /tmp/sing-box.ipk "$WORKSPACE_ROOT/files" \
